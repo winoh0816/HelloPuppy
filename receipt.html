@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8"><title>안녕멍뭉 - 영수증</title><link rel="stylesheet" href="assets/css/style.css"></head>
+<body><div class="app-container"><header><h1>영수증 리워드</h1></header>
+    <div class="content">
+        <p>오프라인 펫샵 결제 영수증을 인증하고<br>포인트와 맞춤형 샘플을 추천받으세요!</p>
+        <div class="card" style="padding:0; overflow:hidden;">
+            <img id="receipt-img" src="https://images.unsplash.com/photo-1605333310058-963503a6bc41?auto=format&fit=crop&w=500&q=80" class="img-placeholder" style="margin:0; border-radius:0; height:250px;">
+        </div>
+        <button class="btn" onclick="startOCR()">영수증 텍스트 추출 (OCR)</button>
+    </div>
+
+<nav class="bottom-nav">
+    <a href="index.html" class="nav-item">🏠<br>홈</a>
+    <a href="receipt.html" class="nav-item">🧾<br>영수증</a>
+    <a href="auth.html" class="nav-item auth-btn">📸<br>인증</a>
+    <a href="feed.html" class="nav-item">🐾<br>피드</a>
+    <a href="shop.html" class="nav-item">🎁<br>상점</a>
+</nav>
+
+<div id="loading-modal" class="modal-overlay">
+    <div class="modal-content">
+        <div id="loading-spinner" class="spinner"></div>
+        <h3 id="loading-msg" style="margin:0; line-height:1.4;"></h3>
+    </div>
+</div>
+<script src="assets/js/app.js"></script>
+</div></body></html>
