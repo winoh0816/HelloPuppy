@@ -1,6 +1,6 @@
 <!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>멍냥산책 - 커뮤니티</title><link rel="stylesheet" href="assets/css/style.css"></head>
-<body><div class="app-container"><header><h1>💬 멍스타그램 피드</h1><a href="mypage.html" style="text-decoration:none;font-size:22px">⚙️</a></header>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 커뮤니티</title><link rel="stylesheet" href="assets/css/style.css"></head>
+<body><div class="app-container"><header><h1>💬 안녕멍뭉 피드</h1><a href="mypage.html" style="text-decoration:none;font-size:22px">⚙️</a></header>
 <div class="content">
 <div class="section-heading" style="margin-top:0">우리 동네 댕댕이 소식 🐶 <button class="btn" style="width:auto;margin:0;padding:8px 13px;font-size:12px" onclick="document.getElementById('composer').style.display=document.getElementById('composer').style.display==='none'?'block':'none'">＋ 글쓰기</button></div>
 <div class="tabs" style="display:flex;gap:7px;margin:0 0 14px"><button class="pill" onclick="filterFeed('all',this)" style="border:0">전체</button><button class="pill" onclick="filterFeed('walk',this)" style="border:0;background:white">산책</button><button class="pill" onclick="filterFeed('daily',this)" style="border:0;background:white">일상</button><button class="pill" onclick="filterFeed('info',this)" style="border:0;background:white">정보공유</button></div>
@@ -15,7 +15,32 @@
 <p class="post-copy">저녁밥 야무지게 먹는 보리! 급여 시간 맞춰서 건강 기록도 완료했어요 ㅎㅎ 🥣</p>
 <div class="post-actions"><button onclick="toggleLike(this)">🤍 15 좋아요</button><button onclick="toast('댓글 기능은 서버 연결 후 사용할 수 있어요 💬')">💬 댓글 2</button></div></article>
 </div>
-<nav class="bottom-nav"><a href="index.html" class="nav-item"><span class="nav-icon">🏠</span>홈</a><a href="auth.html" class="nav-item"><span class="nav-icon">🐾</span>산책</a><a href="feed.html" class="nav-item active"><span class="nav-icon">💬</span>커뮤니티</a><a href="mypage.html" class="nav-item"><span class="nav-icon">⚙️</span>설정</a></nav></div>
+<nav class="bottom-nav">
+  <a href="index.html" class="nav-item">
+    <span class="nav-icon">🏠</span>
+    홈
+  </a>
+
+  <a href="auth.html" class="nav-item">
+    <span class="nav-icon">🐾</span>
+    산책
+  </a>
+
+  <a href="shop.html" class="nav-item">
+    <span class="nav-icon">🛍️</span>
+    상점
+  </a>
+
+  <a href="feed.html" class="nav-item">
+    <span class="nav-icon">💬</span>
+    커뮤니티
+  </a>
+
+  <a href="mypage.html" class="nav-item">
+    <span class="nav-icon">⚙️</span>
+    설정
+  </a>
+</nav>
 <script>
 function toggleLike(btn){const liked=btn.dataset.liked!=='true';btn.dataset.liked=liked?'true':'false';let n=Number((btn.textContent.match(/\\d+/)||['0'])[0]);btn.textContent=(liked?'❤️ ':'🤍 ')+(n+(liked?1:-1))+' 좋아요';}
 function filterFeed(kind,btn){document.querySelectorAll('.tabs .pill').forEach(b=>{b.style.background='white';b.style.color='var(--brown)'});btn.style.background='var(--coral)';btn.style.color='white';document.querySelectorAll('.feed-post').forEach(p=>p.style.display=kind==='all'||p.dataset.kind===kind?'block':'none')}
