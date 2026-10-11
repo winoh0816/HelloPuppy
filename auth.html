@@ -1,22 +1,21 @@
 <!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"><title>안녕멍뭉 - AI 인증</title><link rel="stylesheet" href="assets/css/style.css"></head>
-<body><div class="app-container"><header><h1>실시간 카메라 인증</h1></header>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - AI 인증</title><link rel="stylesheet" href="assets/css/style.css"></head>
+<body><div class="app-container"><header><h1>🐾 산책 인증하기</h1></header>
     <div class="content">
         <div class="scanner-box">
-            <img src="https://images.unsplash.com/photo-1543466835-00a7907e9de1?auto=format&fit=crop&w=500&q=80" alt="camera view">
+            <img src="https://images.unsplash.com/photo-1548199973-03cce0bbc87b?auto=format&fit=crop&w=900&q=85" alt="camera view">
             <div class="scan-line"></div>
-            <div style="position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.5); color:white; padding:5px 10px; border-radius:5px; font-size:12px;">📍 GPS: 서울특별시 ㅇㅇ동<br>🕒 시간: 18:30</div>
+            <div style="position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.5); color:white; padding:5px 10px; border-radius:5px; font-size:12px;">📍 GPS: 위치 권한 연결 필요<br>🕒 실시간 인증 화면</div>
         </div>
         <button class="btn" onclick="startCameraAuth()">📸 촬영 및 AI 검증 시작</button>
         <p style="text-align:center; font-size:12px; color:#888; margin-top:15px;">* 화면 도용 방지를 위해 실시간 촬영만 허용됩니다.</p>
     </div>
 
 <nav class="bottom-nav">
-    <a href="index.html" class="nav-item">🏠<br>홈</a>
-    <a href="receipt.html" class="nav-item">🧾<br>영수증</a>
-    <a href="auth.html" class="nav-item auth-btn">📸<br>인증</a>
-    <a href="feed.html" class="nav-item">🐾<br>피드</a>
-    <a href="shop.html" class="nav-item">🎁<br>상점</a>
+<a href="index.html" class="nav-item"><span class="nav-icon">🏠</span>홈</a>
+<a href="auth.html" class="nav-item"><span class="nav-icon">🐾</span>산책</a>
+<a href="feed.html" class="nav-item"><span class="nav-icon">💬</span>커뮤니티</a>
+<a href="mypage.html" class="nav-item"><span class="nav-icon">⚙️</span>설정</a>
 </nav>
 
 <div id="loading-modal" class="modal-overlay">
