@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 계정·설정</title><link rel="stylesheet" href="assets/css/style.css"><script src="assets/js/api-client.js" defer></script><script src="assets/js/account-dashboard.js" defer></script></head>
+<body><div class="app-container"><header><h1><img class="brand-icon" src="assets/images/brand/nav-settings.png" alt=""> 계정·설정</h1><a class="account-home-link" href="account.html">로그인</a></header>
+<main class="content">
+    <section class="card account-summary-card" id="accountSummary"><div class="health-empty">계정 정보를 불러오는 중입니다.</div></section>
+    <a class="health-shortcut" href="health.html"><span class="health-shortcut-icon"><img src="assets/images/brand/icon-heart.png" alt=""></span><span><strong>동물병원 건강 요약</strong><small>반려견 정보, 건강 기록, 산책·급여 이력</small></span><span class="health-shortcut-arrow">›</span></a>
+    <section class="health-footer-note"><strong>DB 저장 안내</strong><p>계정, 반려견 정보, 건강 기록, 포인트 원장, 인증 사진과 커뮤니티 데이터는 백엔드 SQLite 데이터베이스에 저장됩니다. 계정 간 데이터 접근은 API에서 사용자 ID로 제한됩니다.</p></section>
+    <button type="button" id="logoutButton" class="account-logout" hidden>로그아웃</button>
+    <p id="accountDashboardStatus" class="account-status" role="status"></p>
+</main>
+<nav class="bottom-nav"><a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a><a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a><a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a><a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a><a href="mypage.html" class="nav-item active" aria-current="page"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a></nav>
+</div></body></html>

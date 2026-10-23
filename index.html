@@ -1,18 +1,23 @@
 <!DOCTYPE html>
 <html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 홈</title><link rel="stylesheet" href="assets/css/style.css"></head>
 <body><div class="app-container">
-<header><h1>🐾 안녕멍뭉</h1><a href="mypage.html" aria-label="설정" style="text-decoration:none;font-size:22px">⚙️</a></header>
+<header><h1><img class="brand-logo" src="assets/images/brand/puppy-app-icon.png" alt="">안녕멍뭉</h1><a href="mypage.html" aria-label="설정" style="text-decoration:none;font-size:22px"><img class="brand-icon" src="assets/images/brand/nav-settings.png" alt=""></a></header>
 <div class="content">
-  <section class="hero-card"><h2>오늘도<br>즐거운 산책! 🐾</h2><p>강아지와 함께하는<br>더 행복한 하루</p><div class="hero-mascot">🐶</div></section>
+  <section class="hero-card"><h2>오늘도<br>즐거운 산책!</h2><p>강아지와 함께하는<br>더 행복한 하루</p><img class="hero-mascot" src="assets/images/brand/puppy-walk-hero-card.jpg" alt="산책을 즐기는 안녕멍뭉 캐릭터"></section>
   <div class="section-heading">📍 오늘의 산책 추천 <a class="muted" href="auth.html">산책 인증 ›</a></div>
   <a href="auth.html"><div class="card" style="padding:10px">
-    <div class="walk-scene"><div class="skyline"></div><div class="walk-dog">🐕</div><div class="scene-label">📍 한강공원 · 함께 걷기 좋은 코스</div></div>
+    <div class="walk-scene"><img class="walk-scene-image" src="assets/images/brand/puppy-walk-hero-card.jpg" alt="강아지와 보호자의 산책 일러스트"><div class="scene-label">📍 한강공원 · 함께 걷기 좋은 코스</div></div>
     <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:11px"><span class="pill">🌿 강변 산책</span><span class="pill">🚶 약 30분</span><span class="pill">🐾 반려견과 함께</span></div>
   </div></a>
   <div class="section-heading">🌱 초코의 오늘 활동 <span class="pill">🐾 1,500 P</span></div>
+  <a class="health-shortcut" href="health.html">
+    <span class="health-shortcut-icon"><img src="assets/images/brand/icon-heart.png" alt=""></span>
+    <span><strong>동물병원 건강 요약</strong><small>병원 방문 전 반려견 정보와 생활 기록을 준비해요</small></span>
+    <span class="health-shortcut-arrow">›</span>
+  </a>
 <!-- 포인트 상점 바로가기 -->
 <a href="shop.html" class="shop-shortcut">
-  <div class="shop-shortcut-icon">🛍️</div>
+  <div class="shop-shortcut-icon"><img src="assets/images/brand/icon-bone.png" alt=""></div>
 
   <div class="shop-shortcut-info">
     <strong>포인트 상점</strong>
@@ -25,7 +30,7 @@
   
   <a href="auth.html">
     <div class="mission-card">
-      <div class="mission-icon">🐾</div>
+      <div class="mission-icon"><img src="assets/images/brand/icon-paw.png" alt=""></div>
       <div>
         <strong>산책 인증하기</strong>
         <div class="muted">GPS 기반 야외 활동 인증 (+100P)</div>
@@ -36,7 +41,7 @@
 
   <a href="feeding.html">
     <div class="mission-card">
-      <div class="mission-icon" style="background:#e9f4ff">🥣</div>
+      <div class="mission-icon"><img src="assets/images/brand/emoji-drink.png" alt=""></div>
       <div>
         <strong>식사/급여 인증하기</strong>
         <div class="muted">사료 급여 사진 촬영 및 AI 검증 (+50P)</div>
@@ -47,7 +52,7 @@
 
   <a href="receipt.html">
     <div class="mission-card">
-      <div class="mission-icon" style="background:#fff0cf">🧾</div>
+      <div class="mission-icon"><img src="assets/images/brand/icon-camera.png" alt=""></div>
       <div>
         <strong>영수증 리워드</strong>
         <div class="muted">오프라인 펫샵 결제 영수증 인증 (+30P)</div>
@@ -57,31 +62,31 @@
   </a>
 
   <div class="section-heading">💬 커뮤니티 소식 <a class="muted" href="feed.html">더보기 ›</a></div>
-  <div class="card"><div class="post-meta"><div class="avatar">🐶</div><div><b>보리 누나</b><div class="muted">2시간 전</div></div></div><p class="post-copy">오늘 한강에서 산책했는데 바람도 선선하고 너무 행복했어요 🐾 다들 좋은 하루 보내세요!</p><div class="post-actions"><button onclick="this.classList.toggle('liked');this.textContent=this.classList.contains('liked')?'❤️ 좋아요':'🤍 좋아요'">🤍 좋아요</button><a href="feed.html">💬 댓글 보기</a></div></div>
+  <div class="card"><div class="post-meta"><div class="avatar"><img src="assets/images/brand/emoji-hello.png" alt=""></div><div><b>보리 누나</b><div class="muted">2시간 전</div></div></div><p class="post-copy">오늘 한강에서 산책했는데 바람도 선선하고 너무 행복했어요 🐾 다들 좋은 하루 보내세요!</p><div class="post-actions"><button onclick="this.classList.toggle('liked')"><img class="brand-icon small" src="assets/images/brand/icon-heart.png" alt=""> 좋아요</button><a href="feed.html"><img class="brand-icon small" src="assets/images/brand/icon-chat.png" alt=""> 댓글 보기</a></div></div>
 </div>
 <nav class="bottom-nav">
-  <a href="index.html" class="nav-item">
-    <span class="nav-icon">🏠</span>
+  <a href="index.html" class="nav-item active" aria-current="page">
+    <span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>
     홈
   </a>
 
   <a href="auth.html" class="nav-item">
-    <span class="nav-icon">🐾</span>
+    <span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>
     산책
   </a>
 
   <a href="shop.html" class="nav-item">
-    <span class="nav-icon">🛍️</span>
+    <span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>
     상점
   </a>
 
   <a href="feed.html" class="nav-item">
-    <span class="nav-icon">💬</span>
+    <span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>
     커뮤니티
   </a>
 
   <a href="mypage.html" class="nav-item">
-    <span class="nav-icon">⚙️</span>
+    <span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>
     설정
   </a>
 </nav></div></body></html>

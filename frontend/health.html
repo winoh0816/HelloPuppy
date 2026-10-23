@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fffaf5">
+    <title>안녕멍뭉 - 동물병원 건강 요약</title>
+    <link rel="stylesheet" href="assets/css/style.css">
+    <script src="assets/js/api-client.js" defer></script>
+    <script src="assets/js/health-records.js" defer></script>
+</head>
+<body>
+<div class="app-container health-app">
+    <header>
+        <h1><img class="brand-icon" src="assets/images/brand/icon-heart.png" alt=""> 건강 기록</h1>
+        <button class="health-print-btn" type="button" onclick="window.print()">인쇄 / PDF</button>
+    </header>
+
+    <main class="content health-content">
+        <section class="health-intro">
+            <div class="health-intro-icon"><img src="assets/images/brand/puppy-app-icon.png" alt=""></div>
+            <div>
+                <span class="health-eyebrow">VETERINARY VISIT SUMMARY</span>
+                <h2>병원에서 한눈에 확인하는<br>우리 아이 건강 기록</h2>
+                <p>보호자가 입력한 정보와 앱에 기록된 활동을 모아 보여줍니다.</p>
+            </div>
+        </section>
+
+        <div class="health-notice" role="note">
+            보호자가 입력한 참고용 요약입니다. 진단서·처방전·동물병원 EMR/EHR을 대체하지 않으며, 병원 기록과 의료진 확인이 필요합니다.
+        </div>
+
+        <section class="health-section" aria-labelledby="pet-profile-title">
+            <div class="health-section-heading">
+                <div><span class="health-section-kicker">01 · PROFILE</span><h2 id="pet-profile-title">반려견 기본 정보</h2></div>
+                <button class="health-text-btn" type="button" id="editProfileButton">정보 수정</button>
+            </div>
+            <div class="health-profile-card" id="petProfileSummary" aria-live="polite"></div>
+            <form id="petProfileForm" class="health-form" hidden>
+                <div class="health-form-grid">
+                    <label>반려견 이름<input name="name" maxlength="40" placeholder="예: 초코" required></label>
+                    <label>견종<input name="breed" maxlength="60" placeholder="예: 푸들 / 믹스견"></label>
+                    <label>생년월일<input name="birth_date" type="date"></label>
+                    <label>성별
+                        <select name="sex"><option value="">선택 안 함</option><option value="female">암컷</option><option value="male">수컷</option></select>
+                    </label>
+                    <label>현재 체중 (kg)<input name="weight_kg" type="number" min="0" max="150" step="0.1" inputmode="decimal" placeholder="예: 4.2"></label>
+                    <label>중성화 여부
+                        <select name="neutered"><option value="unknown">모름 / 미입력</option><option value="yes">완료</option><option value="no">미완료</option></select>
+                    </label>
+                    <label>보호자 이름<input name="guardian_name" maxlength="60" placeholder="보호자 성함"></label>
+                    <label>보호자 연락처<input name="guardian_phone" type="tel" maxlength="30" placeholder="병원 연락용"></label>
+                    <label class="health-form-wide">마이크로칩 번호 (선택)<input name="microchip_id" maxlength="40" placeholder="번호를 알고 있을 때만 입력"></label>
+                    <label class="health-form-wide">알레르기·주의사항<textarea name="allergies" rows="3" maxlength="1200" placeholder="예: 닭고기 알레르기 의심 (보호자 기록, 병원 확인 필요)"></textarea></label>
+                    <label class="health-form-wide">만성질환·과거 병력<textarea name="medical_notes" rows="3" maxlength="1600" placeholder="진단명, 진단 병원/시기, 현재 상태 등"></textarea></label>
+                </div>
+                <div class="health-form-actions"><button class="health-secondary-btn" type="button" id="cancelProfileButton">취소</button><button class="health-primary-btn" type="submit">기본 정보 저장</button></div>
+            </form>
+        </section>
+
+        <section class="health-section" aria-labelledby="activity-title">
+            <div class="health-section-heading">
+                <div><span class="health-section-kicker">02 · ROUTINE</span><h2 id="activity-title">최근 30일 생활 패턴</h2></div>
+                <span class="health-period">최근 30일</span>
+            </div>
+            <div class="health-stat-grid">
+                <article class="health-stat-card"><span class="health-stat-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span><strong id="walkFrequency">기록 없음</strong><span>산책 인증 횟수</span><small id="walkDays">인증된 산책 기록 기준</small></article>
+                <article class="health-stat-card"><span class="health-stat-icon"><img src="assets/images/brand/emoji-drink.png" alt=""></span><strong id="feedingFrequency">기록 없음</strong><span>급여 인증 횟수</span><small id="feedingTime">인증된 급여 기록 기준</small></article>
+            </div>
+            <div class="health-food-card">
+                <div class="health-food-icon"><img src="assets/images/brand/icon-bone.png" alt=""></div>
+                <div class="health-food-copy"><span>현재 먹는 사료 (보호자 입력)</span><strong id="foodSummary">아직 입력되지 않았어요</strong><small id="feedingScheduleSummary">급여 시간 정보가 없습니다.</small></div>
+                <button class="health-text-btn" type="button" id="editFoodButton">수정</button>
+            </div>
+            <form id="foodForm" class="health-form health-inline-form" hidden>
+                <label>사료 브랜드·제품명<input name="food_name" maxlength="120" placeholder="예: 브랜드명 / 제품명"></label>
+                <label>하루 급여 횟수<input name="meals_per_day" type="number" min="1" max="12" step="1" placeholder="예: 2"></label>
+                <label>평소 급여 시간<input name="feeding_schedule" maxlength="100" placeholder="예: 오전 8시, 오후 7시"></label>
+                <label>급여량·메모<input name="food_notes" maxlength="300" placeholder="예: 1회 40g, 처방식 여부 등"></label>
+                <div class="health-form-actions"><button class="health-secondary-btn" type="button" id="cancelFoodButton">취소</button><button class="health-primary-btn" type="submit">급여 정보 저장</button></div>
+            </form>
+        </section>
+
+        <section class="health-section" aria-labelledby="medical-record-title">
+            <div class="health-section-heading">
+                <div><span class="health-section-kicker">03 · HEALTH LOG</span><h2 id="medical-record-title">진료·건강 기록</h2></div>
+                <button class="health-primary-btn health-add-btn" type="button" id="addRecordButton">+ 기록 추가</button>
+            </div>
+            <div class="health-record-list" id="healthRecordList" aria-live="polite"></div>
+            <form id="healthRecordForm" class="health-form" hidden>
+                <div class="health-form-grid">
+                    <label>기록 종류
+                        <select name="record_type"><option value="visit">병원 방문</option><option value="vaccination">예방접종</option><option value="medication">복용 약</option><option value="symptom">증상·관찰</option><option value="weight">체중 측정</option><option value="other">기타</option></select>
+                    </label>
+                    <label>날짜<input name="record_date" type="date" required></label>
+                    <label>병원·기관<input name="clinic" maxlength="100" placeholder="예: 해피 동물병원"></label>
+                    <label>제목<input name="title" maxlength="100" placeholder="예: 종합백신 2차"></label>
+                    <label class="health-form-wide">상세 내용<textarea name="notes" rows="4" maxlength="2000" placeholder="진료 결과, 접종명, 약 이름·용량·기간 등. 처방 내용은 병원 안내를 그대로 기록하세요."></textarea></label>
+                </div>
+                <div class="health-form-actions"><button class="health-secondary-btn" type="button" id="cancelRecordButton">취소</button><button class="health-primary-btn" type="submit">기록 저장</button></div>
+            </form>
+        </section>
+
+        <section class="health-footer-note">
+            <strong>기록을 안전하게 확인하세요</strong>
+            <p>반려견 정보와 건강 기록은 로그인 계정에 연결해 프로젝트 SQLite 데이터베이스에 저장됩니다. 인쇄/PDF나 화면 공유 전 보호자 연락처 같은 민감정보를 확인하세요. 백엔드는 현재 개발용이므로 정기 백업과 운영 환경 보안 설정이 필요합니다.</p>
+        </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="주요 메뉴">
+        <a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
+        <a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
+        <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
+        <a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
+        <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
+    </nav>
+</div>
+</body>
+</html>

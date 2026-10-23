@@ -2,13 +2,14 @@
 <html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉</title><link rel="stylesheet" href="assets/css/style.css">
 <style>
     .splash-container { background: #FF7043; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; max-width: 480px; margin: 0 auto; }
-    .logo { font-size: 40px; font-weight: 900; margin-bottom: 10px; animation: pulse 2s infinite; }
+    .logo { display:flex; flex-direction:column; align-items:center; gap:12px; font-size: 32px; font-weight: 900; margin-bottom: 10px; animation: pulse 2s infinite; }
+    .logo img { width: 190px; height: 190px; object-fit: contain; border-radius: 38px; box-shadow: 0 15px 35px #8d453522; }
     .login-box { margin-top: 50px; width: 80%; animation: fadeIn 1s ease-out; }
     .login-btn { background: white; color: #FF7043; font-weight: bold; border-radius: 25px; padding: 15px; margin-bottom: 10px; display: block; text-align: center; text-decoration: none; }
     .kakao-btn { background: #FEE500; color: #000; }
 </style></head>
 <body><div class="splash-container">
-    <div class="logo">🐶 안녕멍뭉</div>
+    <div class="logo"><img src="assets/images/brand/puppy-app-icon.png" alt="안녕멍뭉 강아지 앱 아이콘">안녕멍뭉</div>
     <p>우리, 오늘도 좋은 산책 함께할까? ♡</p>
     <div class="login-box">
         <a href="index.html" class="login-btn kakao-btn">카카오톡으로 시작하기</a>

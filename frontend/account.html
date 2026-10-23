@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fffaf5">
+    <title>안녕멍뭉 - 계정</title>
+    <link rel="stylesheet" href="assets/css/style.css">
+    <script src="assets/js/api-client.js" defer></script>
+    <script src="assets/js/account.js" defer></script>
+</head>
+<body>
+<div class="app-container">
+    <header><h1>내 계정</h1><a class="account-home-link" href="index.html">홈으로</a></header>
+    <main class="content account-content">
+        <section class="account-card">
+            <img src="assets/images/brand/puppy-app-icon.png" alt="안녕멍뭉" class="account-logo">
+            <h2>내 정보를 서버에 안전하게 저장해요</h2>
+            <p class="account-caption">계정을 만들면 반려견 정보, 건강 기록, 포인트, 인증·커뮤니티 기록을 SQLite DB에 저장합니다.</p>
+            <p class="account-warning">이전 데모에서 브라우저에 저장된 포인트·프로필은 신뢰할 수 없어 자동 이관하지 않습니다. 새 계정의 포인트는 0P부터 시작합니다.</p>
+            <p class="account-warning">개발 단계 저장소입니다. 실제 서비스 전에 HTTPS, 세션 만료·정리, 백업·복구와 개인정보 처리 정책을 구성하세요.</p>
+            <div class="account-tabs" role="tablist">
+                <button type="button" class="account-tab active" data-mode="login">로그인</button>
+                <button type="button" class="account-tab" data-mode="register">계정 만들기</button>
+            </div>
+            <form id="accountForm" class="account-form">
+                <label id="displayNameRow" hidden>표시 이름<input name="display_name" maxlength="80" autocomplete="name" placeholder="보호자 이름"></label>
+                <label>이메일<input name="email" type="email" maxlength="254" autocomplete="email" required placeholder="name@example.com"></label>
+                <label>비밀번호<input name="password" type="password" minlength="10" maxlength="128" autocomplete="current-password" required placeholder="10자 이상"></label>
+                <button class="btn" id="accountSubmit" type="submit">로그인</button>
+            </form>
+            <button id="logoutButton" class="account-logout" type="button" hidden>로그아웃</button>
+            <p id="accountStatus" class="account-status" role="status"></p>
+        </section>
+    </main>
+</div>
+</body>
+</html>

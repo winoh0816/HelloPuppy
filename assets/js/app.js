@@ -8,6 +8,8 @@ const SHOP_HISTORY_KEY = "helloPuppyRedemptionHistory";
 
 const LEGACY_SHOP_POINTS_KEY = "hellopuppy_points";
 const LEGACY_SHOP_HISTORY_KEY = "hellopuppy_exchange_history";
+const VERIFICATION_API_BASE = window.HELLOPUPPY_API_BASE || "http://127.0.0.1:8000";
+const VERIFIED_ACTIVITY_KEY = "helloPuppyVerifiedActivityLog";
 
 let isBuyingItem = false;
 let shopToastTimer = null;
@@ -137,30 +139,29 @@ function addShopPoints(amount, reason) {
 }
 
 
+// 인증 성공 활동의 시각만 건강 요약에 기록합니다. 사진 원본은 저장하지 않습니다.
+function recordVerifiedActivity(activity, confidence) {
+    try {
+        const saved = JSON.parse(localStorage.getItem(VERIFIED_ACTIVITY_KEY) || "[]");
+        const activities = Array.isArray(saved) ? saved : [];
+        activities.push({
+            activity,
+            recordedAt: new Date().toISOString(),
+            confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null
+        });
+        localStorage.setItem(VERIFIED_ACTIVITY_KEY, JSON.stringify(activities.slice(-5000)));
+    } catch (error) {
+        console.error("인증 활동 기록을 저장하지 못했습니다.", error);
+    }
+}
+
+
 /* =========================================
    산책 인증
    ========================================= */
 
 function startCameraAuth() {
-    const scanLine = document.querySelector(".scan-line");
-
-    if (scanLine) {
-        scanLine.style.display = "block";
-    }
-
-    showLoading(
-        "AI 비전 및 GPS 데이터<br>교차 검증 중입니다...",
-        {
-            message: "✅ 인증 성공!<br>산책 포인트 100P가 적립되었습니다.",
-
-            action: () => {
-                // 산책 인증 성공 시 100P 적립
-                addShopPoints(100, "산책 인증");
-
-                window.location.href = "feed.html";
-            }
-        }
-    );
+    return verifyActivityPhoto("walk", "walk-photo", "walk-photo-status", 100);
 }
 
 
@@ -208,7 +209,7 @@ const shopProducts = [
         category: "영양제",
         description: "관절 관리용 샘플 상품",
         price: 500,
-        icon: "🦴"
+        icon: "assets/images/brand/icon-bone.png"
     },
     {
         id: "food-001",
@@ -216,7 +217,7 @@ const shopProducts = [
         category: "사료",
         description: "연어 레시피 체험팩",
         price: 1000,
-        icon: "🥣"
+        icon: "assets/images/brand/emoji-drink.png"
     },
     {
         id: "snack-002",
@@ -224,7 +225,7 @@ const shopProducts = [
         category: "간식",
         description: "반려견 간식 샘플",
         price: 300,
-        icon: "🍪"
+        icon: "assets/images/brand/emoji-best.png"
     },
     {
         id: "food-002",
@@ -232,7 +233,7 @@ const shopProducts = [
         category: "사료",
         description: "사료 체험용 소포장",
         price: 700,
-        icon: "🐶"
+        icon: "assets/images/brand/emoji-start.png"
     },
     {
         id: "health-001",
@@ -240,7 +241,7 @@ const shopProducts = [
         category: "영양제",
         description: "영양제 체험용 샘플",
         price: 800,
-        icon: "🧴"
+        icon: "assets/images/brand/icon-paw.png"
     },
     {
         id: "goods-001",
@@ -248,7 +249,7 @@ const shopProducts = [
         category: "용품",
         description: "산책에 필요한 기본 용품",
         price: 400,
-        icon: "🛍️"
+        icon: "assets/images/brand/icon-bone.png"
     }
 ];
 
@@ -368,7 +369,7 @@ function renderShopProducts(category = "all") {
         return `
             <article class="shop-product-card">
                 <div class="shop-product-visual" aria-hidden="true">
-                    ${product.icon}
+                    <img src="${escapeShopText(product.icon)}" alt="">
                 </div>
 
                 <div class="shop-product-info">
@@ -434,6 +435,9 @@ function renderRedemptionHistory() {
         const name = escapeShopText(item.name || "상품");
         const date = escapeShopText(item.date || "");
         const icon = escapeShopText(item.icon || "🎁");
+        const iconMarkup = icon.startsWith("assets/images/brand/")
+            ? `<img src="${icon}" alt="">`
+            : icon;
 
         const cost = Number(item.cost ?? item.price ?? 0);
         const safeCost = Number.isFinite(cost) && cost >= 0
@@ -443,7 +447,7 @@ function renderRedemptionHistory() {
         return `
             <div class="shop-history-item">
                 <div class="shop-history-icon" aria-hidden="true">
-                    ${icon}
+                    ${iconMarkup}
                 </div>
 
                 <div class="shop-history-details">
@@ -627,61 +631,108 @@ function initPointShop() {
 
 // 촬영한 급여 사진 미리보기
 function previewFeedingPhoto(event) {
-    const file = event.target.files[0];
+    previewVerificationPhoto(event, "feeding");
+}
 
-    if (!file) {
-        return;
-    }
+
+// 사진 미리보기 및 파일 형식 확인
+function previewVerificationPhoto(event, activity) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+
+    const statusId = activity === "walk" ? "walk-photo-status" : "feeding-photo-status";
+    const previewId = activity === "walk" ? "walk-preview" : "feeding-img";
+    const status = document.getElementById(statusId);
+    const preview = document.getElementById(previewId);
 
     if (!file.type.startsWith("image/")) {
-        alert("이미지 파일을 선택해 주세요.");
+        if (status) status.textContent = "이미지 파일을 선택해 주세요.";
+        event.target.value = "";
+        return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+        if (status) status.textContent = "사진은 12MB 이하로 선택해 주세요.";
         event.target.value = "";
         return;
     }
 
-    const imageUrl = URL.createObjectURL(file);
+    if (preview) {
+        if (preview.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+        const objectUrl = URL.createObjectURL(file);
+        preview.dataset.objectUrl = objectUrl;
+        preview.src = objectUrl;
+    }
+    if (status) status.textContent = "사진이 선택되었습니다. AI 검증을 진행해 주세요.";
+}
 
-    document.getElementById("feeding-img").src = imageUrl;
 
-    document.getElementById("feeding-photo-status").textContent =
-        "✅ 사진이 선택되었습니다. AI 인증을 진행해 주세요.";
+// 서버 판별 결과로만 인증을 완료하고 포인트를 적립
+async function verifyActivityPhoto(activity, inputId, statusId, points) {
+    const input = document.getElementById(inputId);
+    const status = document.getElementById(statusId);
+    const file = input && input.files && input.files[0];
+    if (!file) {
+        if (status) status.textContent = "먼저 인증할 사진을 촬영해 주세요.";
+        return;
+    }
+
+    const modal = document.getElementById("loading-modal");
+    const message = document.getElementById("loading-msg");
+    const spinner = document.getElementById("loading-spinner");
+    const scanLine = document.querySelector(".scan-line");
+    if (modal && message && spinner) {
+        message.textContent = "백엔드 AI가 사진을 판별하고 있습니다...";
+        spinner.style.display = "block";
+        modal.style.display = "flex";
+    }
+    if (scanLine) scanLine.style.display = "block";
+
+    try {
+        const form = new FormData();
+        form.append("photo", file, file.name);
+        const response = await fetch(
+            `${VERIFICATION_API_BASE}/api/verify/${activity}`,
+            { method: "POST", body: form }
+        );
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(result.detail || "인증 서버에 연결할 수 없습니다.");
+        }
+
+        if (!result.verified) {
+            const note = result.message || "요청한 활동을 사진에서 확인하지 못했습니다.";
+            if (status) status.textContent = `${note} 포인트는 적립되지 않았습니다.`;
+            if (message) message.textContent = note;
+            return;
+        }
+
+        const earned = addShopPoints(points, activity === "walk" ? "산책 인증" : "급여 인증");
+        if (earned) recordVerifiedActivity(activity, result.confidence);
+        const success = earned
+            ? `인증 성공! ${points}P가 적립되었습니다. (AI 신뢰도 ${(result.confidence * 100).toFixed(1)}%)`
+            : "인증은 성공했지만 포인트 저장에 실패했습니다.";
+        if (status) status.textContent = success;
+        if (message) message.textContent = success;
+        if (earned) {
+            window.setTimeout(() => { window.location.href = "feed.html"; }, 1400);
+        }
+    } catch (error) {
+        const note = error instanceof Error ? error.message : "인증 중 오류가 발생했습니다.";
+        if (status) status.textContent = `${note} 포인트는 적립되지 않았습니다.`;
+        if (message) message.textContent = note;
+    } finally {
+        if (scanLine) scanLine.style.display = "none";
+        if (spinner) spinner.style.display = "none";
+        if (modal) {
+            window.setTimeout(() => { modal.style.display = "none"; }, 1200);
+        }
+    }
 }
 
 
 // 급여 사진 인증
 function startFeedingAuth() {
-    const photoInput = document.getElementById("feeding-photo");
-
-    if (!photoInput.files || photoInput.files.length === 0) {
-        alert("먼저 사료 급여 사진을 촬영해 주세요.");
-        return;
-    }
-
-    const scanLine = document.getElementById("feeding-scan-line");
-
-    if (scanLine) {
-        scanLine.style.display = "block";
-    }
-
-    showLoading(
-        "AI 비전으로 사료 급여 사진을<br>검증하고 있습니다...",
-        {
-            message:
-                "🎉 급여 인증 성공!<br>" +
-                "식사/급여 포인트 50P가 적립되었습니다.",
-
-            action: () => {
-                if (scanLine) {
-                    scanLine.style.display = "none";
-                }
-
-                // 급여 인증 성공 시 50P 적립
-                addShopPoints(50, "급여 인증");
-
-                window.location.href = "feed.html";
-            }
-        }
-    );
+    return verifyActivityPhoto("feeding", "feeding-photo", "feeding-photo-status", 50);
 }
 
 
