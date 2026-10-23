@@ -1,0 +1,7 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9
+Pillow>=10.4
+# Keep torch and torchvision versions compatible with each other and the selected OS/GPU.
+torch>=2.2
+torchvision>=0.17
