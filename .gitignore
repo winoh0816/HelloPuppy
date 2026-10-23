@@ -60,6 +60,12 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+.env
+.env.*
+!.env.example
+backend/data/*.sqlite3
+backend/data/*.sqlite3-shm
+backend/data/*.sqlite3-wal
 
 # Flask stuff:
 instance/
@@ -130,6 +136,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-backend/
 env/
 venv/
 ENV/
