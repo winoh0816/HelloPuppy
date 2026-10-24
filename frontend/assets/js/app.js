@@ -231,6 +231,12 @@ async function verifyActivityPhoto(activity, inputId, statusId) {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.detail || "인증 서버에 연결할 수 없습니다.");
+        if (result.demo) {
+            const note = result.message || "시연 모드 판정이 완료되었습니다. 실제 포인트는 적립되지 않았습니다.";
+            if (status) status.textContent = note;
+            if (message) message.textContent = note;
+            return;
+        }
         if (!result.verified) {
             const note = result.message || "요청한 활동을 사진에서 확인하지 못했습니다.";
             if (status) status.textContent = `${note} 포인트는 적립되지 않았습니다.`;

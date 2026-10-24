@@ -144,6 +144,9 @@ class CommunityPostRequest(BaseModel):
     category: str = Field(default="daily", max_length=40)
     title: str = Field(default="", max_length=160)
     body: str = Field(min_length=1, max_length=10000)
+    location_name: str = Field(default="", max_length=200)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
     image_id: int | None = Field(default=None, ge=1)
 
 
@@ -442,15 +445,67 @@ def get_image(image_id: int, user: dict[str, Any] = Depends(get_current_user)) -
 def list_posts(limit: int = 50, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     safe_limit = max(1, min(limit, 100))
     with db_connection() as db:
-        rows = db.execute("""SELECT p.id,p.user_id,p.pet_id,p.category,p.title,p.body,p.image_id,p.created_at,u.display_name,
+        rows = db.execute("""SELECT p.id,p.user_id,p.pet_id,p.category,p.title,p.body,p.location_name,p.latitude,p.longitude,p.image_id,p.created_at,u.display_name,
             (SELECT COUNT(*) FROM post_likes l WHERE l.post_id=p.id) AS like_count,
             EXISTS(SELECT 1 FROM post_likes l WHERE l.post_id=p.id AND l.user_id=?) AS liked
             FROM community_posts p JOIN users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT ?""", (user["id"], safe_limit)).fetchall()
     return {"items": [dict(row) for row in rows]}
 
 
+@app.get("/api/community/walk-map")
+def list_public_walk_map_posts(limit: int = 100) -> dict[str, Any]:
+    """Return only locations explicitly shared by logged-in community members."""
+    safe_limit = max(1, min(limit, 200))
+    with db_connection() as db:
+        rows = db.execute("""SELECT p.id,p.category,p.title,p.body,p.location_name,p.latitude,p.longitude,p.image_id,p.created_at,u.display_name,
+            (SELECT COUNT(*) FROM community_place_recommendations r WHERE r.post_id=p.id) AS recommendation_count
+            FROM community_posts p JOIN users u ON u.id=p.user_id
+            WHERE p.location_name<>'' AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+            ORDER BY p.id DESC LIMIT ?""", (safe_limit,)).fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
+@app.get("/api/community/walk-map/images/{image_id}")
+def get_public_walk_map_image(image_id: int) -> Any:
+    """Serve an image only when it is attached to an explicitly public map post."""
+    from fastapi.responses import Response
+
+    with db_connection() as db:
+        row = db.execute("""SELECT i.mime_type,i.image_data FROM images i
+            JOIN community_posts p ON p.image_id=i.id
+            WHERE i.id=? AND i.purpose='community' AND p.location_name<>''
+                AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL""", (image_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="공개 지도 게시물의 사진을 찾을 수 없습니다.")
+    return Response(content=bytes(row["image_data"]), media_type=row["mime_type"], headers={"Cache-Control": "public, max-age=300"})
+
+
+@app.get("/api/community/posts/{post_id}/recommendation")
+def get_place_recommendation(post_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with db_connection() as db:
+        post = db.execute("SELECT id FROM community_posts WHERE id=? AND location_name<>''", (post_id,)).fetchone()
+        if post is None:
+            raise HTTPException(status_code=404, detail="추천 장소를 찾을 수 없습니다.")
+        recommended = db.execute("SELECT 1 FROM community_place_recommendations WHERE post_id=? AND user_id=?", (post_id, user["id"])).fetchone()
+        count = db.execute("SELECT COUNT(*) AS count FROM community_place_recommendations WHERE post_id=?", (post_id,)).fetchone()["count"]
+    return {"recommended": recommended is not None, "count": int(count)}
+
+
+@app.post("/api/community/posts/{post_id}/recommendation")
+def recommend_place(post_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with transaction() as db:
+        post = db.execute("SELECT id FROM community_posts WHERE id=? AND location_name<>''", (post_id,)).fetchone()
+        if post is None:
+            raise HTTPException(status_code=404, detail="추천 장소를 찾을 수 없습니다.")
+        db.execute("INSERT OR IGNORE INTO community_place_recommendations(post_id,user_id) VALUES(?,?)", (post_id, user["id"]))
+        count = db.execute("SELECT COUNT(*) AS count FROM community_place_recommendations WHERE post_id=?", (post_id,)).fetchone()["count"]
+    return {"recommended": True, "count": int(count)}
+
+
 @app.post("/api/community/posts")
 def create_post(request: CommunityPostRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if (request.latitude is None) != (request.longitude is None):
+        raise HTTPException(status_code=422, detail="지도 위치는 위도와 경도를 함께 선택해야 합니다.")
     if request.image_id is not None:
         with db_connection() as db:
             image = db.execute("SELECT id FROM images WHERE id=? AND user_id=? AND purpose='community'", (request.image_id, user["id"])).fetchone()
@@ -458,8 +513,8 @@ def create_post(request: CommunityPostRequest, user: dict[str, Any] = Depends(ge
             raise HTTPException(status_code=404, detail="업로드한 커뮤니티 사진을 찾을 수 없습니다.")
     with transaction() as db:
         pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user["id"],)).fetchone()
-        cursor = db.execute("INSERT INTO community_posts(user_id,pet_id,category,title,body,image_id) VALUES(?,?,?,?,?,?)",
-                            (user["id"], pet["id"], request.category, request.title, request.body, request.image_id))
+        cursor = db.execute("INSERT INTO community_posts(user_id,pet_id,category,title,body,location_name,latitude,longitude,image_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (user["id"], pet["id"], request.category, request.title, request.body, request.location_name, request.latitude, request.longitude, request.image_id))
         row = db.execute("SELECT * FROM community_posts WHERE id=?", (cursor.lastrowid,)).fetchone()
     return {"post": dict(row)}
 
@@ -518,11 +573,28 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
     image, mime = _decode_image(data)
     _load_runtime()
     if _activity_model is None or _activity_transform is None:
+        demo_mode = os.getenv("HELLOPUPPY_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
         with transaction() as db:
             image_id = _store_image(db, int(user["id"]), f"verification_{activity}", photo.filename or "photo", mime, data)
-            db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,image_id)
-                SELECT ?,id,?,'unavailable','',? FROM pets WHERE user_id=?""",
-                (user["id"], activity, image_id, user["id"]))
+            if demo_mode:
+                db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,confidence,margin,image_id)
+                    SELECT ?,id,?,'demo',?,1.0,1.0,? FROM pets WHERE user_id=?""",
+                    (user["id"], activity, activity, image_id, user["id"]))
+                balance_row = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user["id"],)).fetchone()
+                balance = int(balance_row["balance"]) if balance_row else 0
+            else:
+                db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,image_id)
+                    SELECT ?,id,?,'unavailable','',? FROM pets WHERE user_id=?""",
+                    (user["id"], activity, image_id, user["id"]))
+        if demo_mode:
+            return {
+                "verified": False, "demo": True, "activity": activity,
+                "activity_label": ACTIVITY_LABELS[activity], "predicted": activity,
+                "confidence": 1.0, "margin": 1.0, "dog_detected": None,
+                "dog_confidence": None, "scores": {activity: 1.0},
+                "points_awarded": 0, "balance": balance,
+                "message": "시연 모드: 더미 판정이 완료되었습니다. 실제 AI 인증 및 포인트 적립은 아닙니다."
+            }
         raise HTTPException(status_code=503, detail=_runtime_error or "사진 판별 모델을 사용할 수 없습니다.")
 
     import torch

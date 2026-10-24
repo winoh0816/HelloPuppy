@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fffaf5">
+    <title>안녕멍뭉 - 산책 코스 지도</title>
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+<div class="app-container">
+    <header>
+        <h1><img class="brand-icon" src="assets/images/brand/nav-walk.png" alt="">산책 코스 지도</h1>
+        <a href="index.html" aria-label="홈으로" class="map-home-link"><img src="assets/images/brand/nav-home.png" alt=""></a>
+    </header>
+    <main class="content walk-map-content">
+        <section class="map-intro-card">
+            <span class="map-intro-icon"><img src="assets/images/brand/puppy-app-icon.png" alt="안녕멍뭉 로고"></span>
+            <div>
+                <p>우리 동네 산책 가이드</p>
+                <h2>함께 걷기 좋은 곳을 찾아봐요</h2>
+                <span>피드에서 장소 공유를 선택한 게시물만 모았어요.</span>
+            </div>
+        </section>
+        <p id="mapStatus" class="map-status" role="status">지도를 준비하고 있어요…</p>
+        <div id="walkMap" class="walk-map-canvas" role="region" aria-label="커뮤니티 산책 장소 지도">
+            <div class="map-fallback-art" aria-hidden="true"><span>🌳</span><span>🐾</span><span>🌿</span></div>
+            <p>OpenStreetMap 지도를 불러오고 있어요…</p>
+        </div>
+        <section class="map-list-section">
+            <div class="section-heading"><span>📍 커뮤니티 추천 장소</span><a href="feed.html" class="muted">피드에서 공유 ›</a></div>
+            <div id="mapRecommendations" class="map-recommendations" aria-live="polite"></div>
+        </section>
+    </main>
+    <nav class="bottom-nav">
+        <a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
+        <a href="auth.html" class="nav-item active" aria-current="page"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
+        <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
+        <a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
+        <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
+    </nav>
+</div>
+<script src="assets/js/api-client.js"></script>
+<script src="assets/js/map-config.js"></script>
+<script src="assets/js/map.js"></script>
+</body>
+</html>

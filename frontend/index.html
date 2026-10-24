@@ -5,10 +5,11 @@
 <div class="content">
   <section class="hero-card"><h2>오늘도<br>즐거운 산책!</h2><p>강아지와 함께하는<br>더 행복한 하루</p><img class="hero-mascot" src="assets/images/brand/puppy-walk-hero-card.jpg" alt="산책을 즐기는 안녕멍뭉 캐릭터"></section>
   <div class="section-heading">📍 오늘의 산책 추천 <a class="muted" href="auth.html">산책 인증 ›</a></div>
-  <a href="auth.html"><div class="card" style="padding:10px">
-    <div class="walk-scene"><img class="walk-scene-image" src="assets/images/brand/puppy-walk-hero-card.jpg" alt="강아지와 보호자의 산책 일러스트"><div class="scene-label">📍 한강공원 · 함께 걷기 좋은 코스</div></div>
-    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:11px"><span class="pill">🌿 강변 산책</span><span class="pill">🚶 약 30분</span><span class="pill">🐾 반려견과 함께</span></div>
-  </div></a>
+  <section class="home-walk-map-card" aria-label="커뮤니티 산책 코스 지도 미리보기">
+    <div class="home-walk-map-heading"><span><strong>우리 동네 산책 코스</strong><small id="homeWalkMapStatus" role="status">커뮤니티 장소를 불러오는 중이에요…</small></span><span class="home-map-heart-mark" aria-hidden="true">♥</span></div>
+    <div class="home-walk-map-preview-wrap"><div id="homeWalkMap" class="home-walk-map-preview"></div><a class="home-map-open-hint" href="map.html">지도 크게 보기 <b>↗</b></a></div>
+    <a class="home-walk-map-cta" href="map.html">커뮤니티 추천 장소 모두 보기 <span>›</span></a>
+  </section>
   <div class="section-heading">🌱 내 반려견의 오늘 활동 <span class="pill" id="homePoints">로그인 후 포인트 확인</span></div>
   <a class="health-shortcut" href="health.html">
     <span class="health-shortcut-icon"><img src="assets/images/brand/icon-heart.png" alt=""></span>
@@ -89,4 +90,4 @@
     <span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>
     설정
   </a>
-</nav></div></body></html>
+</nav><script src="assets/js/api-client.js"></script><script src="assets/js/map-config.js"></script><script src="assets/js/home-map-preview.js"></script></div></body></html>

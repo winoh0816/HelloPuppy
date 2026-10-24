@@ -155,11 +155,21 @@ def init_db() -> None:
                 category TEXT NOT NULL DEFAULT 'daily',
                 title TEXT NOT NULL DEFAULT '',
                 body TEXT NOT NULL,
+                location_name TEXT NOT NULL DEFAULT '',
+                latitude REAL,
+                longitude REAL,
                 image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
             CREATE TABLE IF NOT EXISTS post_likes (
+                post_id INTEGER NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                PRIMARY KEY(post_id,user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS community_place_recommendations (
                 post_id INTEGER NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -197,6 +207,14 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_health_user_date ON health_records(user_id, record_date DESC);
             CREATE INDEX IF NOT EXISTS idx_posts_created ON community_posts(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_comments_post ON post_comments(post_id,created_at);
+            CREATE INDEX IF NOT EXISTS idx_place_recommendations_post ON community_place_recommendations(post_id);
             CREATE INDEX IF NOT EXISTS idx_points_user_created ON points_ledger(user_id, created_at DESC);
             """
         )
+        post_columns = {row["name"] for row in db.execute("PRAGMA table_info(community_posts)").fetchall()}
+        if "location_name" not in post_columns:
+            db.execute("ALTER TABLE community_posts ADD COLUMN location_name TEXT NOT NULL DEFAULT ''")
+        if "latitude" not in post_columns:
+            db.execute("ALTER TABLE community_posts ADD COLUMN latitude REAL")
+        if "longitude" not in post_columns:
+            db.execute("ALTER TABLE community_posts ADD COLUMN longitude REAL")

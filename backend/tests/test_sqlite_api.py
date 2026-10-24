@@ -22,6 +22,18 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
     monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
     monkeypatch.setenv("HELLOPUPPY_AUTH_SECRET", "test-secret-that-is-at-least-thirty-two-characters-long")
 
+    with sqlite3.connect(db_path) as legacy_db:
+        legacy_db.execute("""CREATE TABLE community_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            pet_id INTEGER,
+            category TEXT NOT NULL DEFAULT 'daily',
+            title TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL,
+            image_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT ''
+        )""")
+
     with TestClient(app) as client:
         registration = client.post("/api/auth/register", json={
             "email": "guardian@example.test",
@@ -55,6 +67,16 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
                       files={"photo": ("walk.jpg", _jpeg_bytes(), "image/jpeg")})
         assert unavailable.status_code == 503
 
+        monkeypatch.setenv("HELLOPUPPY_DEMO_MODE", "1")
+        demo = client.post("/api/verify/walk", headers=headers,
+                   files={"photo": ("walk-demo.jpg", _jpeg_bytes(), "image/jpeg")})
+        assert demo.status_code == 200
+        assert demo.json()["demo"] is True
+        assert demo.json()["verified"] is False
+        assert demo.json()["points_awarded"] == 0
+        assert demo.json()["balance"] == 0
+        monkeypatch.delenv("HELLOPUPPY_DEMO_MODE")
+
         upload = client.post("/api/uploads?purpose=community", headers=headers,
                              files={"photo": ("post.jpg", _jpeg_bytes(), "image/jpeg")})
         assert upload.status_code == 200
@@ -62,10 +84,32 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
         assert client.get(f"/api/images/{image_id}", headers=headers).status_code == 200
 
         post = client.post("/api/community/posts", headers=headers, json={
-            "category": "daily", "title": "산책 기록", "body": "오늘 공원에 다녀왔어요", "image_id": image_id
+            "category": "walk", "title": "산책 기록", "body": "오늘 공원에 다녀왔어요", "image_id": image_id,
+            "location_name": "한강공원", "latitude": 37.5283, "longitude": 126.9326
         })
         post_id = post.json()["post"]["id"]
         assert post.status_code == 200
+        saved_post = client.get("/api/community/posts", headers=headers).json()["items"][0]
+        assert saved_post["location_name"] == "한강공원"
+        assert saved_post["latitude"] == 37.5283
+        assert saved_post["longitude"] == 126.9326
+        public_map = client.get("/api/community/walk-map")
+        assert public_map.status_code == 200
+        assert public_map.json()["items"][0]["location_name"] == "한강공원"
+        assert public_map.json()["items"][0]["image_id"] == image_id
+        assert public_map.json()["items"][0]["recommendation_count"] == 0
+        public_map_image = client.get(f"/api/community/walk-map/images/{image_id}")
+        assert public_map_image.status_code == 200
+        assert public_map_image.headers["content-type"] == "image/jpeg"
+        assert client.get(f"/api/community/posts/{post_id}/recommendation").status_code == 401
+        first_recommendation = client.post(f"/api/community/posts/{post_id}/recommendation", headers=headers)
+        assert first_recommendation.json() == {"recommended": True, "count": 1}
+        repeated_recommendation = client.post(f"/api/community/posts/{post_id}/recommendation", headers=headers)
+        assert repeated_recommendation.json() == {"recommended": True, "count": 1}
+        invalid_location = client.post("/api/community/posts", headers=headers, json={
+            "body": "좌표 검증", "latitude": 37.5
+        })
+        assert invalid_location.status_code == 422
         assert client.post(f"/api/community/posts/{post_id}/like", headers=headers).json()["liked"] is True
         comment = client.post(f"/api/community/posts/{post_id}/comments", headers=headers, json={"body": "좋은 하루네요"})
         assert comment.status_code == 200
@@ -75,6 +119,9 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
             "email": "other@example.test", "password": "another secure battery staple", "display_name": "다른 보호자"
         })
         second_headers = {"Authorization": f"Bearer {second.json()['access_token']}"}
+        second_recommendation = client.post(f"/api/community/posts/{post_id}/recommendation", headers=second_headers)
+        assert second_recommendation.json() == {"recommended": True, "count": 2}
+        assert client.get("/api/community/walk-map").json()["items"][0]["recommendation_count"] == 2
         assert client.get("/api/pet/profile", headers=second_headers).json()["profile"]["name"] == ""
         assert client.get("/api/health/records", headers=second_headers).json()["items"] == []
         assert client.get(f"/api/images/{image_id}", headers=second_headers).status_code == 200
@@ -94,7 +141,8 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
 
     assert db_path.is_file()
     with sqlite3.connect(db_path) as db:
-        assert db.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 2
+        assert db.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 3
         assert db.execute("SELECT COUNT(*) FROM community_posts").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM health_records").fetchone()[0] == 1
-        assert db.execute("SELECT status FROM activity_logs").fetchone()[0] == "unavailable"
+        assert db.execute("SELECT COUNT(*) FROM activity_logs WHERE status='unavailable'").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM activity_logs WHERE status='demo'").fetchone()[0] == 1
