@@ -2,13 +2,17 @@
     "use strict";
     const summary = document.getElementById("accountSummary");
     const status = document.getElementById("accountDashboardStatus");
-    const logout = document.getElementById("logoutButton");
+    const headerAction = document.getElementById("accountHeaderAction");
     if (!window.HelloPuppyAPI?.isLoggedIn()) {
         summary.innerHTML = '<div class="health-empty"><strong>로그인이 필요합니다.</strong><span>계정을 만들거나 로그인하면 내 데이터와 포인트를 확인할 수 있습니다.</span><a class="health-primary-btn" href="account.html">로그인 / 계정 만들기</a></div>';
         return;
     }
-    logout.hidden = false;
-    logout.addEventListener("click", () => window.HelloPuppyAPI.logout());
+    headerAction.textContent = "로그아웃";
+    headerAction.href = "#";
+    headerAction.addEventListener("click", (event) => {
+        event.preventDefault();
+        window.HelloPuppyAPI.logout();
+    });
     Promise.all([window.HelloPuppyAPI.me(), window.HelloPuppyAPI.request("/api/pet/profile")])
         .then(([account, petResult]) => {
             const pet = petResult.profile || {};

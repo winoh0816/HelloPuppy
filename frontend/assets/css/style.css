@@ -2552,6 +2552,34 @@ p {
     font-size: 11px;
 }
 
+.account-settings-content {
+    display: grid;
+    min-height: 70vh;
+    place-items: start center;
+    padding-top: 18px;
+}
+
+.account-settings-card {
+    max-width: 520px;
+}
+
+.account-settings-tabs {
+    margin-top: 20px;
+}
+
+.account-settings-panel[hidden] {
+    display: none;
+}
+
+.account-settings-panel {
+    padding-top: 8px;
+}
+
+.account-settings-shortcut .health-shortcut-icon {
+    color: var(--coral-deep);
+    font-size: 20px;
+}
+
 .account-summary-card {
     text-align: center;
 }

@@ -47,6 +47,35 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
         assert client.get("/api/auth/me", headers=headers).status_code == 200
         assert client.get("/api/points").status_code == 401
 
+        renamed = client.put("/api/auth/display-name", headers=headers, json={"display_name": "초코 보호자"})
+        assert renamed.status_code == 200
+        assert renamed.json()["user"]["display_name"] == "초코 보호자"
+        bad_email_change = client.put("/api/auth/email", headers=headers, json={
+            "email": "new-guardian@example.test", "current_password": "incorrect password"
+        })
+        assert bad_email_change.status_code == 401
+        email_change = client.put("/api/auth/email", headers=headers, json={
+            "email": "new-guardian@example.test", "current_password": "correct horse battery staple"
+        })
+        assert email_change.status_code == 200
+        assert email_change.json()["user"]["email"] == "new-guardian@example.test"
+        other_session = client.post("/api/auth/login", json={
+            "email": "new-guardian@example.test", "password": "correct horse battery staple"
+        })
+        other_headers = {"Authorization": f"Bearer {other_session.json()['access_token']}"}
+        password_change = client.put("/api/auth/password", headers=headers, json={
+            "current_password": "correct horse battery staple", "new_password": "a newer secure battery staple"
+        })
+        assert password_change.status_code == 200
+        assert client.get("/api/auth/me", headers=headers).status_code == 200
+        assert client.get("/api/auth/me", headers=other_headers).status_code == 401
+        assert client.post("/api/auth/login", json={
+            "email": "new-guardian@example.test", "password": "correct horse battery staple"
+        }).status_code == 401
+        assert client.post("/api/auth/login", json={
+            "email": "new-guardian@example.test", "password": "a newer secure battery staple"
+        }).status_code == 200
+
         profile = client.put("/api/pet/profile", headers=headers, json={"name": "초코", "breed": "믹스견"})
         assert profile.status_code == 200
         assert profile.json()["profile"]["name"] == "초코"

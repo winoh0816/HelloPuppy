@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fffaf5">
+    <title>안녕멍뭉 - 계정 설정</title>
+    <link rel="stylesheet" href="assets/css/style.css">
+    <script src="assets/js/api-client.js" defer></script>
+    <script src="assets/js/account-settings.js" defer></script>
+</head>
+<body>
+<div class="app-container">
+    <header><h1>계정 설정</h1><a class="account-home-link" href="mypage.html">설정으로</a></header>
+    <main class="content account-settings-content">
+        <section class="account-card account-settings-card">
+            <p class="account-caption">내 계정 정보를 안전하게 관리할 수 있어요.</p>
+            <div class="account-tabs account-settings-tabs" role="tablist" aria-label="계정 설정 항목">
+                <button type="button" class="account-tab active" id="profileTab" role="tab" aria-selected="true" aria-controls="profilePanel">닉네임</button>
+                <button type="button" class="account-tab" id="emailTab" role="tab" aria-selected="false" aria-controls="emailPanel">이메일</button>
+                <button type="button" class="account-tab" id="passwordTab" role="tab" aria-selected="false" aria-controls="passwordPanel">비밀번호</button>
+            </div>
+            <section id="profilePanel" class="account-settings-panel" role="tabpanel" aria-labelledby="profileTab">
+                <form id="displayNameForm" class="account-form">
+                    <label>사용자 닉네임<input name="display_name" maxlength="80" autocomplete="nickname" required placeholder="사용할 닉네임"></label>
+                    <button class="btn" type="submit">닉네임 저장</button>
+                </form>
+            </section>
+            <section id="emailPanel" class="account-settings-panel" role="tabpanel" aria-labelledby="emailTab" hidden>
+                <form id="emailForm" class="account-form">
+                    <label>새 이메일 주소<input name="email" type="email" maxlength="254" autocomplete="email" required placeholder="name@example.com"></label>
+                    <label>현재 비밀번호<input name="current_password" type="password" autocomplete="current-password" required></label>
+                    <button class="btn" type="submit">이메일 변경</button>
+                </form>
+            </section>
+            <section id="passwordPanel" class="account-settings-panel" role="tabpanel" aria-labelledby="passwordTab" hidden>
+                <form id="passwordForm" class="account-form">
+                    <label>현재 비밀번호<input name="current_password" type="password" autocomplete="current-password" required></label>
+                    <label>새 비밀번호<input name="new_password" type="password" minlength="10" maxlength="128" autocomplete="new-password" required placeholder="10자 이상"></label>
+                    <label>새 비밀번호 확인<input name="confirm_password" type="password" minlength="10" maxlength="128" autocomplete="new-password" required placeholder="새 비밀번호를 다시 입력"></label>
+                    <button class="btn" type="submit">비밀번호 변경</button>
+                </form>
+                <p class="account-caption">비밀번호 변경 시 다른 기기의 로그인은 해제됩니다.</p>
+            </section>
+            <p id="accountSettingsStatus" class="account-status" role="status" aria-live="polite"></p>
+        </section>
+    </main>
+</div>
+</body>
+</html>

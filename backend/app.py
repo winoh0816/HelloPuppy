@@ -107,6 +107,22 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class DisplayNameRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    display_name: str = Field(min_length=1, max_length=80)
+
+
+class EmailChangeRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    email: str = Field(min_length=5, max_length=254)
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
+
+
 class PetProfileRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     name: str = Field(default="", max_length=80)
@@ -322,6 +338,77 @@ def logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
         db.execute("DELETE FROM sessions WHERE token_hash=?", (user["token_hash"],))
         db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "logout", "user", user["id"]))
     return {"logged_out": True}
+
+
+@app.put("/api/auth/display-name")
+def update_display_name(
+    request: DisplayNameRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    with transaction() as db:
+        db.execute("UPDATE users SET display_name=? WHERE id=?", (request.display_name, user["id"]))
+        db.execute(
+            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+            (user["id"], "update_display_name", "user", user["id"]),
+        )
+        updated = db.execute(
+            "SELECT id,email,display_name,created_at FROM users WHERE id=?", (user["id"],)
+        ).fetchone()
+    return {"user": dict(updated)}
+
+
+@app.put("/api/auth/email")
+def update_email(
+    request: EmailChangeRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    email = request.email.lower()
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise HTTPException(status_code=422, detail="올바른 이메일 주소를 입력하세요.")
+    with transaction() as db:
+        account = db.execute(
+            "SELECT password_salt,password_hash FROM users WHERE id=?", (user["id"],)
+        ).fetchone()
+        _, supplied = hash_password(request.current_password, bytes(account["password_salt"]))
+        if not hmac.compare_digest(supplied, bytes(account["password_hash"])):
+            raise HTTPException(status_code=401, detail="현재 비밀번호가 올바르지 않습니다.")
+        try:
+            db.execute("UPDATE users SET email=? WHERE id=?", (email, user["id"]))
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="이미 등록된 이메일입니다.") from error
+        db.execute(
+            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+            (user["id"], "update_email", "user", user["id"]),
+        )
+        updated = db.execute(
+            "SELECT id,email,display_name,created_at FROM users WHERE id=?", (user["id"],)
+        ).fetchone()
+    return {"user": dict(updated)}
+
+
+@app.put("/api/auth/password")
+def update_password(
+    request: PasswordChangeRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, bool]:
+    with transaction() as db:
+        account = db.execute(
+            "SELECT password_salt,password_hash FROM users WHERE id=?", (user["id"],)
+        ).fetchone()
+        _, supplied = hash_password(request.current_password, bytes(account["password_salt"]))
+        if not hmac.compare_digest(supplied, bytes(account["password_hash"])):
+            raise HTTPException(status_code=401, detail="현재 비밀번호가 올바르지 않습니다.")
+        salt, digest = hash_password(request.new_password)
+        db.execute(
+            "UPDATE users SET password_salt=?,password_hash=? WHERE id=?",
+            (salt, digest, user["id"]),
+        )
+        db.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (user["id"], user["token_hash"]))
+        db.execute(
+            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+            (user["id"], "update_password", "user", user["id"]),
+        )
+    return {"password_updated": True}
 
 
 @app.get("/api/points")
