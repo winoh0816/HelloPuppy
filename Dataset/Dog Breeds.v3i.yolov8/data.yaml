@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 100
+names: ['Affenpinscher', 'Afghan Hound', 'Airedale Terrier', 'Alaskan Malamute', 'American Akita', 'American Cocker Spaniel', 'Australian Cattle', 'Australian Kelpie', 'Australian Shepherd', 'Australian Silky Terrier', 'Australian Terrier', 'Basenji', 'Basset Fauve De Bretagne', 'Basset Hound', 'Beagle', 'Bearded Collie', 'Bedlington Terrier', 'Belgian Laekenois', 'Belgian Shepherd', 'Bernese Mountain', 'Bichon Frise', 'Bloodhound', 'Border Collie', 'Border Terrier', 'Borzoi', 'Boston Terrier', 'Bouvier De Flandres', 'Boxer', 'Briard', 'British Bulldog', 'Brittany', 'Bull Terrier', 'Bullmanstiff', 'Cairn Terrier', 'Cavalier King Charles Spaniel', 'Chesapeake Bay Retriever', 'Chihuahua', 'Chinese Crested', 'Chowchow', 'Clamber spaniel', 'Cocker spaniel', 'Collie', 'Curly coated retriever', 'Dachshund', 'Dalmatian', 'Dandie Dinmont Terrier', 'Deerhound', 'Douge De Bordeaux', 'English Setter', 'English Springer Spaniel', 'Field Spaniel', 'Flat Coated Retriever', 'Fox hound', 'Fox terrier', 'French bulldog', 'German Sheperd', 'German Short-Haired Pointer', 'German Wirehaired Pointer', 'Golden Retriever', 'Gordon Setter', 'Great Dane', 'Greyhound', 'Griffon Bruxellois', 'Hungarian Vizsla', 'Iris Terrier', 'Irish Water Spaniel', 'Irish Wolfhound', 'Irish setter', 'Italian Greyhound', 'Jack Russell', 'Japanese Spitz', 'Keeshond', 'King Charles Spaniel', 'Labrador', 'Lakeland Terrier', 'Lhasa Apso', 'Lowchen', 'Pomeranian', 'Poodle', 'Rottwelier', 'Samoyed', 'Schipperke', 'Schnauzer', 'Scottish Terrier', 'Sealyham terrier', 'Shar pei', 'Shetland sheepdog', 'Shih Tzu', 'Texas heeler', 'Yorkipoo', 'dobermann', 'english toy terrier', 'finnish spitz', 'portuguese water dog', 'pug', 'puli', 'pyrenean mountain dog', 'rhodesian ridgeback', 'saint bernard', 'saluki']
+
+roboflow:
+  workspace: computer-science-gtrnn
+  project: dog-breeds-u4eaf
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/computer-science-gtrnn/dog-breeds-u4eaf/dataset/3
