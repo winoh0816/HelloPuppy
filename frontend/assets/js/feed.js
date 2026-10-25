@@ -205,7 +205,7 @@
         card.append(meta, title, body);
 
         if (post.image_id) {
-            const image = makeElement("img", "img-placeholder");
+            const image = makeElement("img", "community-post-photo");
             image.alt = "커뮤니티 첨부 사진";
             card.append(image);
             api.imageUrl(post.image_id).then((url) => { image.src = url; }).catch(() => image.remove());
@@ -292,8 +292,8 @@
             locationInput?.focus();
             return;
         }
-        if (photo && photo.size > 12 * 1024 * 1024) {
-            showError("사진은 12MB 이하로 선택해 주세요.");
+        if (photo && photo.size > 50 * 1024 * 1024) {
+            showError("커뮤니티 사진은 50MB 이하로 선택해 주세요.");
             return;
         }
 

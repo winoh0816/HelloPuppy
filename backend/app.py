@@ -25,6 +25,7 @@ MODEL_DIR = Path(os.getenv("HELLOPUPPY_MODEL_DIR", Path(__file__).parent / "mode
 ACTIVITY_MODEL_PATH = MODEL_DIR / "activity_classifier.pt"
 DOG_MODEL_PATH = MODEL_DIR / "dog_detector.pt"
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+MAX_COMMUNITY_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_IMAGE_PIXELS = 30_000_000
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
 ACTIVITY_LABELS = {"walk": "산책", "feeding": "급여"}
@@ -215,11 +216,12 @@ def _load_runtime() -> None:
             _dog_model_loaded = False
 
 
-def _decode_image(data: bytes) -> tuple[Image.Image, str]:
+def _decode_image(data: bytes, max_bytes: int = MAX_UPLOAD_BYTES) -> tuple[Image.Image, str]:
     if not data:
         raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="사진은 12MB 이하로 올려 주세요.")
+    if len(data) > max_bytes:
+        limit_mb = max_bytes // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"사진은 {limit_mb}MB 이하로 올려 주세요.")
     try:
         image = Image.open(io.BytesIO(data))
         if image.format not in ALLOWED_FORMATS:
@@ -507,10 +509,12 @@ def delete_health_record(record_id: int, user: dict[str, Any] = Depends(get_curr
 async def upload_image(purpose: str, photo: UploadFile = File(...), user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     if purpose not in {"community", "health"}:
         raise HTTPException(status_code=422, detail="지원하지 않는 이미지 용도입니다.")
-    data = await photo.read(MAX_UPLOAD_BYTES + 1)
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="사진은 12MB 이하로 올려 주세요.")
-    _, mime = _decode_image(data)
+    max_upload_bytes = MAX_COMMUNITY_UPLOAD_BYTES if purpose == "community" else MAX_UPLOAD_BYTES
+    data = await photo.read(max_upload_bytes + 1)
+    if len(data) > max_upload_bytes:
+        limit_mb = max_upload_bytes // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"사진은 {limit_mb}MB 이하로 올려 주세요.")
+    _, mime = _decode_image(data, max_upload_bytes)
     with transaction() as db:
         image_id = _store_image(db, int(user["id"]), purpose, photo.filename or "upload", mime, data)
     return {"image_id": image_id, "purpose": purpose}

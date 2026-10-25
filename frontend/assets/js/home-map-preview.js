@@ -12,10 +12,10 @@
     function createPreviewIcon(count) {
         return L.divIcon({
             className: "home-map-marker-icon",
-            html: `<span class="home-map-marker-pin"><img src="https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png" alt=""></span><span class="home-map-marker-heart"><span>♥</span><b>${Math.max(0, Number(count) || 0)}</b></span>`,
-            iconSize: [66, 40],
-            iconAnchor: [12, 38],
-            popupAnchor: [0, -34]
+            html: `<span class="home-map-marker-heart"><span aria-hidden="true">♥</span><b>${Math.max(0, Number(count) || 0)}</b></span>`,
+            iconSize: [38, 22],
+            iconAnchor: [19, 11],
+            popupAnchor: [0, -13]
         });
     }
 

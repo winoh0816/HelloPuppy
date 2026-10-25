@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import sqlite3
 
 from fastapi.testclient import TestClient
@@ -15,6 +16,29 @@ def _jpeg_bytes() -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (120, 100), (90, 150, 100)).save(buffer, format="JPEG")
     return buffer.getvalue()
+
+
+def test_community_upload_accepts_photos_over_12mb(tmp_path, monkeypatch):
+    db_path = tmp_path / "large-community-photo.sqlite3"
+    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
+    pixels = os.urandom(2200 * 2000 * 3)
+    image = Image.frombytes("RGB", (2200, 2000), pixels)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", compress_level=0)
+    photo = buffer.getvalue()
+    assert len(photo) > 12 * 1024 * 1024
+
+    with TestClient(app) as client:
+        registration = client.post("/api/auth/register", json={
+            "email": "large-photo@example.test",
+            "password": "correct horse battery staple",
+            "display_name": "사진 테스트"
+        })
+        headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+        upload = client.post("/api/uploads?purpose=community", headers=headers,
+                             files={"photo": ("portrait.png", photo, "image/png")})
+
+    assert upload.status_code == 200
 
 
 def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):

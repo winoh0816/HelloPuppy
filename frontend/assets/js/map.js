@@ -67,10 +67,10 @@
         const recommendationCount = Math.max(0, Number(post.recommendation_count) || 0);
         const markerIcon = L.divIcon({
             className: "map-marker-score-icon",
-            html: `<span class="map-marker-pin" aria-hidden="true"><img src="https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png" alt=""></span><span class="map-marker-heart-badge" aria-label="추천 ${recommendationCount}개"><span aria-hidden="true">♥</span><span class="map-marker-heart-count">${recommendationCount}</span></span>`,
-            iconSize: [76, 44],
-            iconAnchor: [13, 41],
-            popupAnchor: [0, -38]
+            html: `<span class="map-marker-heart-badge" aria-label="추천 ${recommendationCount}개"><span aria-hidden="true">♥</span><span class="map-marker-heart-count">${recommendationCount}</span></span>`,
+            iconSize: [42, 24],
+            iconAnchor: [21, 12],
+            popupAnchor: [0, -14]
         });
         const marker = L.marker(position, {
             icon: markerIcon,
