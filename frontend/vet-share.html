@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#fffaf5">
+    <title>안녕멍뭉 - 동물병원용 건강기록 열람</title>
+    <link rel="stylesheet" href="assets/css/style.css?v=health-ehr-1">
+    <script src="assets/js/api-client.js" defer></script>
+    <script src="assets/js/health-common.js" defer></script>
+    <script src="assets/js/vet-share.js" defer></script>
+</head>
+<body>
+<div class="app-container health-app vet-share-app">
+    <header>
+        <h1><img class="brand-icon" src="assets/images/brand/icon-heart.png" alt=""> 병원용 건강기록</h1>
+        <button class="health-print-btn" type="button" onclick="window.print()">인쇄 / PDF</button>
+    </header>
+
+    <main class="content health-content">
+        <div id="shareError" class="health-notice" role="alert" hidden></div>
+
+        <div id="sharedContent" hidden>
+            <section class="health-intro vet-share-banner">
+                <div>
+                    <span class="health-eyebrow">SHARED BY GUARDIAN</span>
+                    <h2 id="shareClinic">동물병원</h2>
+                    <p id="shareMeta"></p>
+                </div>
+            </section>
+
+            <div class="health-notice" role="note">
+                보호자가 입력·보관한 건강기록입니다. <strong>보호자 입력</strong> 항목은 의료진 확인이 필요하며, <strong>병원 입력</strong> 항목은 공유 링크로 동물병원이 직접 남긴 기록입니다.
+            </div>
+
+            <div class="vet-share-actions">
+                <button class="health-secondary-btn" type="button" id="downloadFhirButton">HL7 FHIR(JSON) 내려받기</button>
+                <button class="health-primary-btn" type="button" id="addClinicRecordButton" hidden>+ 진료 기록 입력</button>
+            </div>
+
+            <section class="health-section" id="clinicRecordSection" hidden aria-labelledby="clinic-record-title">
+                <div class="health-section-heading">
+                    <div><span class="health-section-kicker">CLINIC ENTRY</span><h2 id="clinic-record-title">진료 기록 입력</h2></div>
+                </div>
+                <form id="clinicRecordForm" class="health-form">
+                    <div class="health-form-grid">
+                        <label>입력 수의사 이름 *<input name="author_name" maxlength="80" required></label>
+                        <label>수의사 면허번호 (선택)<input name="author_license" maxlength="40"></label>
+                        <label>기록 종류
+                            <select name="record_type" id="clinicRecordType"></select>
+                        </label>
+                        <label>진료일 *<input name="record_date" type="date" required></label>
+                    </div>
+                    <div class="health-form-grid" id="clinicRecordFields"></div>
+                    <div class="health-form-grid">
+                        <label class="health-form-wide">보호자 안내·메모<textarea name="notes" rows="2" maxlength="2000"></textarea></label>
+                    </div>
+                    <p class="health-form-hint">저장한 기록은 보호자 앱에 “병원 입력”으로 표시되고, 보호자가 다른 병원에 공유할 때 함께 전달됩니다.</p>
+                    <div class="health-form-actions"><button class="health-secondary-btn" type="button" id="cancelClinicRecordButton">닫기</button><button class="health-primary-btn" type="submit">기록 저장</button></div>
+                </form>
+            </section>
+
+            <section class="health-section" aria-labelledby="vet-profile-title">
+                <div class="health-section-heading"><div><span class="health-section-kicker">SIGNALMENT</span><h2 id="vet-profile-title">기본 정보</h2></div></div>
+                <div class="health-profile-card" id="vetProfile"></div>
+            </section>
+
+            <section class="health-section" aria-labelledby="vet-alert-title">
+                <div class="health-section-heading"><div><span class="health-section-kicker">ALERTS</span><h2 id="vet-alert-title">알레르기·복용 약·질환·마취 이력</h2></div></div>
+                <div id="vetAlerts"></div>
+            </section>
+
+            <section class="health-section" aria-labelledby="vet-questionnaire-title">
+                <div class="health-section-heading"><div><span class="health-section-kicker">PRE-VISIT</span><h2 id="vet-questionnaire-title">보호자 문진표</h2></div></div>
+                <div id="vetQuestionnaires"></div>
+            </section>
+
+            <section class="health-section" aria-labelledby="vet-preventive-title">
+                <div class="health-section-heading"><div><span class="health-section-kicker">PREVENTIVE</span><h2 id="vet-preventive-title">예방접종·기생충 예방</h2></div></div>
+                <div id="vetPreventive"></div>
+            </section>
+
+            <section class="health-section" aria-labelledby="vet-diet-title">
+                <div class="health-section-heading"><div><span class="health-section-kicker">DIET &amp; ROUTINE</span><h2 id="vet-diet-title">식이·생활 패턴</h2></div><span class="health-period">최근 30일</span></div>
+                <div class="health-stat-grid">
+                    <article class="health-stat-card"><strong id="vetWalkCount"></strong><span>산책 인증 횟수</span><small id="vetWalkDetail"></small></article>
+                    <article class="health-stat-card"><strong id="vetFeedingCount"></strong><span>급여 인증 횟수</span><small id="vetFeedingDetail"></small></article>
+                </div>
+                <div class="health-food-card"><div class="health-food-copy" id="vetDiet"></div></div>
+            </section>
+
+            <section class="health-section" aria-labelledby="vet-records-title">
+                <div class="health-section-heading"><div><span class="health-section-kicker">HEALTH LOG</span><h2 id="vet-records-title">전체 건강 기록</h2></div></div>
+                <div class="health-record-list" id="vetRecords"></div>
+            </section>
+        </div>
+    </main>
+</div>
+</body>
+</html>

@@ -1,17 +1,18 @@
 <!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - AI 인증</title><link rel="stylesheet" href="assets/css/style.css"></head>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - AI 인증</title><link rel="stylesheet" href="assets/css/style.css?v=verify-1"></head>
 <body><div class="app-container"><header><h1><img class="brand-icon" src="assets/images/brand/icon-paw.png" alt="">산책 인증하기</h1></header>
     <div class="content">
         <div class="scanner-box">
           <img id="walk-preview" src="assets/images/brand/puppy-walk-hero-card.jpg" alt="산책 인증 사진 미리보기">
             <div class="scan-line"></div>
-            <div style="position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.5); color:white; padding:5px 10px; border-radius:5px; font-size:12px;">📍 GPS: 위치 권한 연결 필요<br>🕒 실시간 인증 화면</div>
+            <div style="position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.5); color:white; padding:5px 10px; border-radius:5px; font-size:12px;">🐕 강아지 · 🦮 목줄 · 🌳 야외<br>세 가지가 보이게 찍어 주세요</div>
         </div>
         <input type="file" id="walk-photo" accept="image/*" capture="environment" hidden onchange="previewVerificationPhoto(event, 'walk')">
         <button class="btn" type="button" onclick="document.getElementById('walk-photo').click()"><img class="brand-icon" src="assets/images/brand/icon-camera.png" alt=""> 산책 사진 촬영하기</button>
-        <p id="walk-photo-status" class="photo-status" role="status">산책 중인 반려견이 잘 보이도록 사진을 촬영해 주세요.</p>
+        <p id="walk-photo-status" class="photo-status" role="status">목줄을 한 반려견이 야외에서 잘 보이도록 촬영해 주세요.</p>
         <button class="btn" type="button" onclick="startCameraAuth()">사진 AI 검증하기</button>
-        <p style="text-align:center; font-size:12px; color:#888; margin-top:15px;">* 화면 도용 방지를 위해 실시간 촬영만 허용됩니다.</p>
+        <div id="walk-result" class="verify-result" role="status" hidden></div>
+        <p style="text-align:center; font-size:12px; color:#888; margin-top:15px;">* AI(CLIP 장면 분석 + 객체 탐지)가 판별합니다. 이미 인증한 사진·24시간이 지난 사진은 인정되지 않고, 산책 포인트는 하루 2회까지 적립됩니다.</p>
     </div>
 
 <nav class="bottom-nav">
@@ -48,5 +49,5 @@
     </div>
 </div>
 <script src="assets/js/api-client.js"></script>
-<script src="assets/js/app.js"></script>
+<script src="assets/js/app.js?v=verify-1"></script>
 </div></body></html>

@@ -203,7 +203,39 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
+            CREATE TABLE IF NOT EXISTS pre_visit_questionnaires (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                pet_id INTEGER REFERENCES pets(id) ON DELETE SET NULL,
+                visit_date TEXT NOT NULL,
+                clinic TEXT NOT NULL DEFAULT '',
+                chief_complaint TEXT NOT NULL,
+                onset_date TEXT NOT NULL DEFAULT '',
+                frequency TEXT NOT NULL DEFAULT '',
+                progression TEXT NOT NULL DEFAULT '',
+                home_care TEXT NOT NULL DEFAULT '',
+                recent_changes TEXT NOT NULL DEFAULT '',
+                concerns TEXT NOT NULL DEFAULT '',
+                systems_json TEXT NOT NULL DEFAULT '{}',
+                image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS health_shares (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                clinic_name TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK(scope IN ('read','read_write')),
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_activity_user_created ON activity_logs(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_questionnaires_user_date ON pre_visit_questionnaires(user_id, visit_date DESC);
+            CREATE INDEX IF NOT EXISTS idx_health_shares_user ON health_shares(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id);
             CREATE INDEX IF NOT EXISTS idx_health_user_date ON health_records(user_id, record_date DESC);
             CREATE INDEX IF NOT EXISTS idx_posts_created ON community_posts(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_comments_post ON post_comments(post_id,created_at);
@@ -211,10 +243,42 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_points_user_created ON points_ledger(user_id, created_at DESC);
             """
         )
-        post_columns = {row["name"] for row in db.execute("PRAGMA table_info(community_posts)").fetchall()}
-        if "location_name" not in post_columns:
-            db.execute("ALTER TABLE community_posts ADD COLUMN location_name TEXT NOT NULL DEFAULT ''")
-        if "latitude" not in post_columns:
-            db.execute("ALTER TABLE community_posts ADD COLUMN latitude REAL")
-        if "longitude" not in post_columns:
-            db.execute("ALTER TABLE community_posts ADD COLUMN longitude REAL")
+        # 인증 사진 재사용 검사용 dHash, 판정 근거(점수·탐지·체크 결과)
+        _add_missing_columns(db, "images", {"perceptual_hash": "TEXT NOT NULL DEFAULT ''"})
+        _add_missing_columns(db, "activity_logs", {"details_json": "TEXT NOT NULL DEFAULT '{}'"})
+        _add_missing_columns(db, "community_posts", {
+            "location_name": "TEXT NOT NULL DEFAULT ''",
+            "latitude": "REAL",
+            "longitude": "REAL",
+        })
+        # 수의 진료부 기재사항(품종·성별·특징·연령, 동물등록번호)과 문진 항목을 위한 확장 컬럼
+        _add_missing_columns(db, "pets", {
+            "species": "TEXT NOT NULL DEFAULT 'dog'",
+            "birth_date_estimated": "INTEGER NOT NULL DEFAULT 0",
+            "coat_features": "TEXT NOT NULL DEFAULT ''",
+            "registration_type": "TEXT NOT NULL DEFAULT ''",
+            "blood_type": "TEXT NOT NULL DEFAULT ''",
+            "living_environment": "TEXT NOT NULL DEFAULT ''",
+            "other_pets": "TEXT NOT NULL DEFAULT ''",
+        })
+        _add_missing_columns(db, "food_profiles", {
+            "amount_per_meal": "TEXT NOT NULL DEFAULT ''",
+            "treats": "TEXT NOT NULL DEFAULT ''",
+            "supplements": "TEXT NOT NULL DEFAULT ''",
+            "diet_changed_date": "TEXT NOT NULL DEFAULT ''",
+        })
+        # source: guardian(보호자 입력) / clinic(공유 링크로 동물병원이 입력)
+        _add_missing_columns(db, "health_records", {
+            "details_json": "TEXT NOT NULL DEFAULT '{}'",
+            "source": "TEXT NOT NULL DEFAULT 'guardian'",
+            "author_name": "TEXT NOT NULL DEFAULT ''",
+            "author_license": "TEXT NOT NULL DEFAULT ''",
+            "image_id": "INTEGER REFERENCES images(id) ON DELETE SET NULL",
+        })
+
+
+def _add_missing_columns(db: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")

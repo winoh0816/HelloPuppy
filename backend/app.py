@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import io
+import json
 import os
 import secrets
 import sqlite3
@@ -14,24 +15,37 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import verification
 from .database import db_connection, init_db, transaction
+from .health import (
+    LIVING_ENVIRONMENTS, PROGRESSIONS, REGISTRATION_TYPES, SHARE_SCOPES, SPECIES,
+    HealthValidationError, build_summary, questionnaire_row_to_dict, record_row_to_dict, to_fhir_bundle,
+    validate_choice, validate_details, validate_iso_date, validate_systems,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_DIR = Path(os.getenv("HELLOPUPPY_MODEL_DIR", Path(__file__).parent / "models"))
-ACTIVITY_MODEL_PATH = MODEL_DIR / "activity_classifier.pt"
-DOG_MODEL_PATH = MODEL_DIR / "dog_detector.pt"
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_COMMUNITY_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_IMAGE_PIXELS = 30_000_000
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
-ACTIVITY_LABELS = {"walk": "산책", "feeding": "급여"}
+ACTIVITY_LABELS = verification.ACTIVITY_LABELS
+ACTIVITY_POINTS = {"walk": 100, "feeding": 50}
+# 하루 포인트 지급 횟수 (산책 1일 2회, 급여 1일 3회). 초과분도 인증 기록은 남지만 포인트는 0
+DAILY_REWARD_LIMITS = {
+    "walk": int(os.getenv("HELLOPUPPY_WALK_DAILY_LIMIT", "2")),
+    "feeding": int(os.getenv("HELLOPUPPY_FEEDING_DAILY_LIMIT", "3")),
+}
+MAX_PHOTO_AGE_HOURS = int(os.getenv("HELLOPUPPY_MAX_PHOTO_AGE_HOURS", "24"))
+DUPLICATE_HASH_DISTANCE = 6
 STARTING_POINTS = int(os.getenv("HELLOPUPPY_STARTING_POINTS", "0"))
 TOKEN_TTL_DAYS = int(os.getenv("HELLOPUPPY_TOKEN_TTL_DAYS", "30"))
 PBKDF2_ITERATIONS = 310_000
+MAX_SHARE_HOURS = 72
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -46,16 +60,8 @@ app.add_middleware(
     allow_origins=[origin.strip() for origin in _frontend_origin.split(",") if origin.strip()],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"]
+    allow_headers=["Authorization", "Content-Type", "X-Health-Share-Token"]
 )
-
-_activity_model: Any = None
-_activity_transform: Any = None
-_activity_classes: list[str] = []
-_dog_model: Any = None
-_dog_model_loaded = False
-_runtime_error: str | None = None
-
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -137,6 +143,13 @@ class PetProfileRequest(BaseModel):
     microchip_id: str = Field(default="", max_length=80)
     allergies: str = Field(default="", max_length=4000)
     medical_notes: str = Field(default="", max_length=6000)
+    species: str = Field(default="dog", max_length=20)
+    birth_date_estimated: bool = False
+    coat_features: str = Field(default="", max_length=300)
+    registration_type: str = Field(default="", max_length=20)
+    blood_type: str = Field(default="", max_length=40)
+    living_environment: str = Field(default="", max_length=20)
+    other_pets: str = Field(default="", max_length=300)
 
 
 class FoodProfileRequest(BaseModel):
@@ -145,6 +158,10 @@ class FoodProfileRequest(BaseModel):
     meals_per_day: int | None = Field(default=None, ge=1, le=12)
     feeding_schedule: str = Field(default="", max_length=200)
     food_notes: str = Field(default="", max_length=1000)
+    amount_per_meal: str = Field(default="", max_length=80)
+    treats: str = Field(default="", max_length=500)
+    supplements: str = Field(default="", max_length=500)
+    diet_changed_date: str = Field(default="", max_length=10)
 
 
 class HealthRecordRequest(BaseModel):
@@ -154,6 +171,36 @@ class HealthRecordRequest(BaseModel):
     clinic: str = Field(default="", max_length=160)
     title: str = Field(default="", max_length=160)
     notes: str = Field(default="", max_length=6000)
+    details: dict[str, Any] = Field(default_factory=dict)
+    image_id: int | None = Field(default=None, ge=1)
+
+
+class ClinicRecordRequest(HealthRecordRequest):
+    """A record written by a veterinarian through a guardian's read_write share link."""
+    author_name: str = Field(min_length=1, max_length=80)
+    author_license: str = Field(default="", max_length=40)
+
+
+class QuestionnaireRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    visit_date: str = Field(min_length=10, max_length=10)
+    clinic: str = Field(default="", max_length=160)
+    chief_complaint: str = Field(min_length=1, max_length=1000)
+    onset_date: str = Field(default="", max_length=10)
+    frequency: str = Field(default="", max_length=300)
+    progression: str = Field(default="", max_length=20)
+    home_care: str = Field(default="", max_length=1000)
+    recent_changes: str = Field(default="", max_length=1000)
+    concerns: str = Field(default="", max_length=1000)
+    systems: dict[str, Any] = Field(default_factory=dict)
+    image_id: int | None = Field(default=None, ge=1)
+
+
+class HealthShareRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    clinic_name: str = Field(min_length=1, max_length=160)
+    scope: str = Field(default="read", max_length=20)
+    hours: int = Field(default=24, ge=1, le=MAX_SHARE_HOURS)
 
 
 class CommunityPostRequest(BaseModel):
@@ -174,46 +221,6 @@ class ProductRedeemRequest(BaseModel):
 class CommentRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     body: str = Field(min_length=1, max_length=4000)
-
-
-def _load_runtime() -> None:
-    global _activity_model, _activity_transform, _activity_classes
-    global _dog_model, _dog_model_loaded, _runtime_error
-    if _activity_model is not None or _runtime_error is not None:
-        return
-    if not ACTIVITY_MODEL_PATH.is_file():
-        _runtime_error = "활동 분류 모델이 아직 학습되지 않았습니다."
-        return
-    try:
-        import torch
-        from torchvision import transforms
-        from .model import IMAGE_SIZE, create_activity_model
-
-        checkpoint = torch.load(ACTIVITY_MODEL_PATH, map_location="cpu", weights_only=True)
-        classes = checkpoint.get("classes")
-        if not isinstance(classes, list) or set(classes) != {"walk", "feeding", "other"}:
-            raise ValueError("모델의 클래스 정보가 올바르지 않습니다.")
-        model = create_activity_model(num_classes=len(classes))
-        model.load_state_dict(checkpoint["state_dict"])
-        model.eval()
-        _activity_model = model
-        _activity_classes = classes
-        _activity_transform = transforms.Compose([
-            transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-            transforms.ToTensor(),
-            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-        ])
-    except Exception as error:
-        _runtime_error = f"모델 로딩 실패: {error}"
-        return
-    if DOG_MODEL_PATH.is_file():
-        try:
-            from ultralytics import YOLO
-            _dog_model = YOLO(str(DOG_MODEL_PATH))
-            _dog_model_loaded = True
-        except Exception:
-            _dog_model = None
-            _dog_model_loaded = False
 
 
 def _decode_image(data: bytes, max_bytes: int = MAX_UPLOAD_BYTES) -> tuple[Image.Image, str]:
@@ -238,10 +245,10 @@ def _decode_image(data: bytes, max_bytes: int = MAX_UPLOAD_BYTES) -> tuple[Image
         raise HTTPException(status_code=400, detail="올바른 이미지 파일이 아닙니다.") from error
 
 
-def _store_image(db: sqlite3.Connection, user_id: int, purpose: str, filename: str, mime: str, data: bytes) -> int:
+def _store_image(db: sqlite3.Connection, user_id: int, purpose: str, filename: str, mime: str, data: bytes, perceptual_hash: str = "") -> int:
     cursor = db.execute(
-        "INSERT INTO images(user_id,purpose,mime_type,original_name,image_data) VALUES(?,?,?,?,?)",
-        (user_id, purpose, mime, Path(filename).name[:255], data)
+        "INSERT INTO images(user_id,purpose,mime_type,original_name,image_data,perceptual_hash) VALUES(?,?,?,?,?,?)",
+        (user_id, purpose, mime, Path(filename).name[:255], data, perceptual_hash)
     )
     return int(cursor.lastrowid)
 
@@ -266,17 +273,16 @@ def _award_points(db: sqlite3.Connection, user_id: int, delta: int, reason: str,
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    _load_runtime()
     with db_connection() as db:
         db.execute("SELECT 1")
+    status = verification.verifier.status()
     return {
         "status": "ok",
         "database": "sqlite",
         "database_path": str(Path(os.getenv("HELLOPUPPY_DB_PATH", Path(__file__).parent / "data" / "hellopuppy.sqlite3")).resolve()),
-        "ready": _activity_model is not None,
-        "activity_model": ACTIVITY_MODEL_PATH.is_file(),
-        "dog_detector": _dog_model_loaded,
-        "message": _runtime_error
+        **status,
+        "activity_model": status["trained_classifier"],
+        "dog_detector": status["object_detector"] is not None,
     }
 
 
@@ -450,9 +456,17 @@ def save_pet_profile(request: PetProfileRequest, user: dict[str, Any] = Depends(
         raise HTTPException(status_code=422, detail="성별 값이 올바르지 않습니다.")
     if data["neutered"] not in {"yes", "no", "unknown"}:
         raise HTTPException(status_code=422, detail="중성화 값이 올바르지 않습니다.")
+    try:
+        validate_choice(data["species"], SPECIES, "동물 종류")
+        validate_choice(data["registration_type"], REGISTRATION_TYPES, "동물등록 방식")
+        validate_choice(data["living_environment"], LIVING_ENVIRONMENTS, "생활환경")
+    except HealthValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     with transaction() as db:
-        db.execute("""UPDATE pets SET name=?,breed=?,birth_date=?,sex=?,weight_kg=?,neutered=?,guardian_name=?,guardian_phone=?,microchip_id=?,allergies=?,medical_notes=?,updated_at=? WHERE user_id=?""",
-                   (data["name"], data["breed"], data["birth_date"], data["sex"], data["weight_kg"], data["neutered"], data["guardian_name"], data["guardian_phone"], data["microchip_id"], data["allergies"], data["medical_notes"], utc_iso(), user["id"]))
+        db.execute("""UPDATE pets SET name=?,breed=?,birth_date=?,sex=?,weight_kg=?,neutered=?,guardian_name=?,guardian_phone=?,microchip_id=?,allergies=?,medical_notes=?,
+                species=?,birth_date_estimated=?,coat_features=?,registration_type=?,blood_type=?,living_environment=?,other_pets=?,updated_at=? WHERE user_id=?""",
+                   (data["name"], data["breed"], data["birth_date"], data["sex"], data["weight_kg"], data["neutered"], data["guardian_name"], data["guardian_phone"], data["microchip_id"], data["allergies"], data["medical_notes"],
+                    data["species"], int(data["birth_date_estimated"]), data["coat_features"], data["registration_type"], data["blood_type"], data["living_environment"], data["other_pets"], utc_iso(), user["id"]))
         row = db.execute("SELECT * FROM pets WHERE user_id=?", (user["id"],)).fetchone()
     return {"profile": dict(row)}
 
@@ -466,34 +480,75 @@ def get_food(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]
 
 @app.put("/api/pet/food")
 def save_food(request: FoodProfileRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    try:
+        validate_iso_date(request.diet_changed_date, "사료 변경일")
+    except HealthValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     with transaction() as db:
         pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user["id"],)).fetchone()
-        db.execute("""INSERT INTO food_profiles(pet_id,food_name,meals_per_day,feeding_schedule,food_notes,updated_at) VALUES(?,?,?,?,?,?)
-            ON CONFLICT(pet_id) DO UPDATE SET food_name=excluded.food_name,meals_per_day=excluded.meals_per_day,feeding_schedule=excluded.feeding_schedule,food_notes=excluded.food_notes,updated_at=excluded.updated_at""",
-            (pet["id"], request.food_name, request.meals_per_day, request.feeding_schedule, request.food_notes, utc_iso()))
+        db.execute("""INSERT INTO food_profiles(pet_id,food_name,meals_per_day,feeding_schedule,food_notes,amount_per_meal,treats,supplements,diet_changed_date,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(pet_id) DO UPDATE SET food_name=excluded.food_name,meals_per_day=excluded.meals_per_day,feeding_schedule=excluded.feeding_schedule,food_notes=excluded.food_notes,
+            amount_per_meal=excluded.amount_per_meal,treats=excluded.treats,supplements=excluded.supplements,diet_changed_date=excluded.diet_changed_date,updated_at=excluded.updated_at""",
+            (pet["id"], request.food_name, request.meals_per_day, request.feeding_schedule, request.food_notes,
+             request.amount_per_meal, request.treats, request.supplements, request.diet_changed_date, utc_iso()))
         row = db.execute("SELECT * FROM food_profiles WHERE pet_id=?", (pet["id"],)).fetchone()
     return {"food": dict(row)}
+
+
+def _activity_cutoff(days: int = 30) -> str:
+    return (utc_now() - timedelta(days=days)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _require_health_image(db: sqlite3.Connection, user_id: int, image_id: int | None) -> None:
+    if image_id is None:
+        return
+    image = db.execute("SELECT id FROM images WHERE id=? AND user_id=? AND purpose='health'", (image_id, user_id)).fetchone()
+    if image is None:
+        raise HTTPException(status_code=404, detail="업로드한 건강 기록 사진을 찾을 수 없습니다.")
+
+
+def _insert_health_record(db: sqlite3.Connection, user_id: int, request: HealthRecordRequest, *, source: str = "guardian",
+                          clinic: str | None = None, author_name: str = "", author_license: str = "") -> dict[str, Any]:
+    try:
+        validate_iso_date(request.record_date, "날짜")
+        details = validate_details(request.record_type, request.details)
+    except HealthValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    _require_health_image(db, user_id, request.image_id)
+    pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user_id,)).fetchone()
+    cursor = db.execute("""INSERT INTO health_records(user_id,pet_id,record_type,record_date,clinic,title,notes,details_json,source,author_name,author_license,image_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (user_id, pet["id"], request.record_type, request.record_date, clinic if clinic is not None else request.clinic,
+         request.title, request.notes, json.dumps(details, ensure_ascii=False), source, author_name, author_license, request.image_id))
+    if request.record_type == "weight":
+        # 가장 최근 체중 측정 기록을 기본 정보의 현재 체중으로 반영한다.
+        newer = db.execute("""SELECT 1 FROM health_records WHERE user_id=? AND record_type='weight' AND id<>?
+            AND record_date>?""", (user_id, cursor.lastrowid, request.record_date)).fetchone()
+        if newer is None:
+            db.execute("UPDATE pets SET weight_kg=?,updated_at=? WHERE id=?", (details["weight_kg"], utc_iso(), pet["id"]))
+    row = db.execute("SELECT * FROM health_records WHERE id=?", (cursor.lastrowid,)).fetchone()
+    return record_row_to_dict(row)
+
+
+@app.get("/api/health/summary")
+def get_health_summary(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with db_connection() as db:
+        summary = build_summary(db, int(user["id"]), _activity_cutoff())
+    return {"summary": summary}
 
 
 @app.get("/api/health/records")
 def list_health_records(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
         rows = db.execute("SELECT * FROM health_records WHERE user_id=? ORDER BY record_date DESC,id DESC", (user["id"],)).fetchall()
-    return {"items": [dict(row) for row in rows]}
+    return {"items": [record_row_to_dict(row) for row in rows]}
 
 
 @app.post("/api/health/records")
 def create_health_record(request: HealthRecordRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    try:
-        date.fromisoformat(request.record_date)
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail="날짜는 YYYY-MM-DD 형식이어야 합니다.") from error
     with transaction() as db:
-        pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user["id"],)).fetchone()
-        cursor = db.execute("INSERT INTO health_records(user_id,pet_id,record_type,record_date,clinic,title,notes) VALUES(?,?,?,?,?,?,?)",
-                            (user["id"], pet["id"], request.record_type, request.record_date, request.clinic, request.title, request.notes))
-        row = db.execute("SELECT * FROM health_records WHERE id=?", (cursor.lastrowid,)).fetchone()
-    return {"record": dict(row)}
+        record = _insert_health_record(db, int(user["id"]), request)
+    return {"record": record}
 
 
 @app.delete("/api/health/records/{record_id}")
@@ -502,7 +557,163 @@ def delete_health_record(record_id: int, user: dict[str, Any] = Depends(get_curr
         cursor = db.execute("DELETE FROM health_records WHERE id=? AND user_id=?", (record_id, user["id"]))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="건강 기록을 찾을 수 없습니다.")
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "delete_health_record", "health_record", record_id))
     return {"deleted": True}
+
+
+@app.get("/api/health/questionnaires")
+def list_questionnaires(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with db_connection() as db:
+        rows = db.execute("SELECT * FROM pre_visit_questionnaires WHERE user_id=? ORDER BY visit_date DESC,id DESC", (user["id"],)).fetchall()
+    return {"items": [questionnaire_row_to_dict(row) for row in rows]}
+
+
+@app.post("/api/health/questionnaires")
+def create_questionnaire(request: QuestionnaireRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    try:
+        validate_iso_date(request.visit_date, "방문일")
+        validate_iso_date(request.onset_date, "증상 시작일")
+        validate_choice(request.progression, PROGRESSIONS, "경과")
+        systems = validate_systems(request.systems)
+    except HealthValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with transaction() as db:
+        _require_health_image(db, int(user["id"]), request.image_id)
+        pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user["id"],)).fetchone()
+        cursor = db.execute("""INSERT INTO pre_visit_questionnaires(user_id,pet_id,visit_date,clinic,chief_complaint,onset_date,frequency,progression,home_care,recent_changes,concerns,systems_json,image_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (user["id"], pet["id"], request.visit_date, request.clinic, request.chief_complaint, request.onset_date, request.frequency,
+             request.progression, request.home_care, request.recent_changes, request.concerns, json.dumps(systems, ensure_ascii=False), request.image_id))
+        row = db.execute("SELECT * FROM pre_visit_questionnaires WHERE id=?", (cursor.lastrowid,)).fetchone()
+    return {"questionnaire": questionnaire_row_to_dict(row)}
+
+
+@app.delete("/api/health/questionnaires/{questionnaire_id}")
+def delete_questionnaire(questionnaire_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
+    with transaction() as db:
+        cursor = db.execute("DELETE FROM pre_visit_questionnaires WHERE id=? AND user_id=?", (questionnaire_id, user["id"]))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="문진표를 찾을 수 없습니다.")
+    return {"deleted": True}
+
+
+@app.get("/api/health/export/fhir")
+def export_health_fhir(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with transaction() as db:
+        summary = build_summary(db, int(user["id"]), _activity_cutoff())
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "export_fhir", "pet", summary["pet"].get("id")))
+    return to_fhir_bundle(summary, utc_iso())
+
+
+# ---------------------------------------------------------------------------
+# 병원 공유: 보호자가 병원별로 기한부 링크를 발급하고, 병원은 로그인 없이 링크로 열람(·입력)한다.
+# 토큰 원문은 발급 응답에서 한 번만 돌려주고 DB에는 SHA-256 해시만 저장한다.
+# ---------------------------------------------------------------------------
+
+def _share_status(row: sqlite3.Row) -> str:
+    if row["revoked_at"]:
+        return "revoked"
+    return "active" if row["expires_at"] > utc_iso() else "expired"
+
+
+@app.post("/api/health/shares")
+def create_health_share(request: HealthShareRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if request.scope not in SHARE_SCOPES:
+        raise HTTPException(status_code=422, detail="공유 권한 값이 올바르지 않습니다.")
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    expires_at = (utc_now() + timedelta(hours=request.hours)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    with transaction() as db:
+        cursor = db.execute("INSERT INTO health_shares(user_id,token_hash,clinic_name,scope,expires_at) VALUES(?,?,?,?,?)",
+                            (user["id"], token_hash, request.clinic_name, request.scope, expires_at))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "share_create", "health_share", cursor.lastrowid))
+        row = db.execute("SELECT id,clinic_name,scope,expires_at,revoked_at,created_at FROM health_shares WHERE id=?", (cursor.lastrowid,)).fetchone()
+    return {"share": {**dict(row), "status": "active", "access_count": 0, "last_accessed_at": None}, "token": token}
+
+
+@app.get("/api/health/shares")
+def list_health_shares(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with db_connection() as db:
+        rows = db.execute("""SELECT s.id,s.clinic_name,s.scope,s.expires_at,s.revoked_at,s.created_at,
+            (SELECT COUNT(*) FROM audit_logs a WHERE a.entity_type='health_share' AND a.entity_id=s.id AND a.action IN ('share_view','share_write','share_export')) AS access_count,
+            (SELECT MAX(a.created_at) FROM audit_logs a WHERE a.entity_type='health_share' AND a.entity_id=s.id AND a.action IN ('share_view','share_write','share_export')) AS last_accessed_at
+            FROM health_shares s WHERE s.user_id=? ORDER BY s.id DESC LIMIT 50""", (user["id"],)).fetchall()
+    return {"items": [{**dict(row), "status": _share_status(row)} for row in rows]}
+
+
+@app.delete("/api/health/shares/{share_id}")
+def revoke_health_share(share_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
+    with transaction() as db:
+        cursor = db.execute("UPDATE health_shares SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL", (utc_iso(), share_id, user["id"]))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="공유 링크를 찾을 수 없거나 이미 취소되었습니다.")
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "share_revoke", "health_share", share_id))
+    return {"revoked": True}
+
+
+def get_health_share(x_health_share_token: str | None = Header(default=None)) -> dict[str, Any]:
+    # 만료·취소된 링크도 존재 여부를 드러내지 않도록 모두 404로 응답한다.
+    not_found = HTTPException(status_code=404, detail="공유 링크가 없거나 만료·취소되었습니다. 보호자에게 새 링크를 요청하세요.")
+    if not x_health_share_token or not 20 <= len(x_health_share_token) <= 128:
+        raise not_found
+    token_hash = hashlib.sha256(x_health_share_token.encode("utf-8")).hexdigest()
+    with db_connection() as db:
+        share = db.execute("SELECT * FROM health_shares WHERE token_hash=? AND revoked_at IS NULL AND expires_at>?", (token_hash, utc_iso())).fetchone()
+    if share is None:
+        raise not_found
+    return dict(share)
+
+
+def _log_share_access(db: sqlite3.Connection, share: dict[str, Any], action: str) -> None:
+    db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (share["user_id"], action, "health_share", share["id"]))
+
+
+def _public_share(share: dict[str, Any]) -> dict[str, Any]:
+    return {key: share[key] for key in ("clinic_name", "scope", "expires_at")}
+
+
+@app.get("/api/shared/health")
+def view_shared_health(share: dict[str, Any] = Depends(get_health_share)) -> dict[str, Any]:
+    with transaction() as db:
+        summary = build_summary(db, int(share["user_id"]), _activity_cutoff())
+        _log_share_access(db, share, "share_view")
+    return {"share": _public_share(share), "summary": summary}
+
+
+@app.get("/api/shared/health/fhir")
+def export_shared_health_fhir(share: dict[str, Any] = Depends(get_health_share)) -> dict[str, Any]:
+    with transaction() as db:
+        summary = build_summary(db, int(share["user_id"]), _activity_cutoff())
+        _log_share_access(db, share, "share_export")
+    return to_fhir_bundle(summary, utc_iso())
+
+
+@app.post("/api/shared/health/records")
+def create_shared_health_record(request: ClinicRecordRequest, share: dict[str, Any] = Depends(get_health_share)) -> dict[str, Any]:
+    if share["scope"] != "read_write":
+        raise HTTPException(status_code=403, detail="이 공유 링크는 열람 전용입니다.")
+    if request.image_id is not None:
+        raise HTTPException(status_code=422, detail="병원 입력 기록에는 사진을 첨부할 수 없습니다.")
+    with transaction() as db:
+        record = _insert_health_record(db, int(share["user_id"]), request, source="clinic", clinic=share["clinic_name"],
+                                       author_name=request.author_name, author_license=request.author_license)
+        _log_share_access(db, share, "share_write")
+    return {"record": record}
+
+
+@app.get("/api/shared/health/images/{image_id}")
+def get_shared_health_image(image_id: int, share: dict[str, Any] = Depends(get_health_share)) -> Any:
+    from fastapi.responses import Response
+
+    with db_connection() as db:
+        row = db.execute("""SELECT i.mime_type,i.image_data FROM images i
+            WHERE i.id=? AND i.user_id=? AND i.purpose='health' AND (
+                EXISTS(SELECT 1 FROM health_records r WHERE r.image_id=i.id AND r.user_id=i.user_id)
+                OR EXISTS(SELECT 1 FROM pre_visit_questionnaires q WHERE q.image_id=i.id AND q.user_id=i.user_id))""",
+                         (image_id, share["user_id"])).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
+    return Response(content=bytes(row["image_data"]), media_type=row["mime_type"], headers={"Cache-Control": "private, no-store"})
 
 
 @app.post("/api/uploads")
@@ -662,8 +873,7 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="사진은 12MB 이하로 올려 주세요.")
     image, mime = _decode_image(data)
-    _load_runtime()
-    if _activity_model is None or _activity_transform is None:
+    if not verification.verifier.ready:
         demo_mode = os.getenv("HELLOPUPPY_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
         with transaction() as db:
             image_id = _store_image(db, int(user["id"]), f"verification_{activity}", photo.filename or "photo", mime, data)
@@ -686,44 +896,77 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
                 "points_awarded": 0, "balance": balance,
                 "message": "시연 모드: 더미 판정이 완료되었습니다. 실제 AI 인증 및 포인트 적립은 아닙니다."
             }
-        raise HTTPException(status_code=503, detail=_runtime_error or "사진 판별 모델을 사용할 수 없습니다.")
+        raise HTTPException(status_code=503, detail=verification.verifier.status()["message"] or "사진 판별 모델을 사용할 수 없습니다.")
 
-    import torch
-    tensor = _activity_transform(image).unsqueeze(0)
-    with torch.inference_mode():
-        probabilities = torch.softmax(_activity_model(tensor)[0], dim=0)
-    scores = {label: float(probabilities[index].item()) for index, label in enumerate(_activity_classes)}
-    predicted = max(scores, key=scores.get)
-    expected_score = scores[activity]
-    margin = expected_score - max(score for label, score in scores.items() if label != activity)
-    threshold = float(os.getenv("HELLOPUPPY_ACTIVITY_THRESHOLD", "0.70"))
-    min_margin = float(os.getenv("HELLOPUPPY_ACTIVITY_MARGIN", "0.15"))
+    user_id = int(user["id"])
+    label = ACTIVITY_LABELS[activity]
+    photo_hash = verification.difference_hash(image)
+    taken_at = verification.photo_taken_at(Image.open(io.BytesIO(data)))
+    fraud_checks: list[dict[str, Any]] = []
 
-    dog_detected: bool | None = None
-    dog_confidence: float | None = None
-    if _dog_model_loaded and _dog_model is not None:
-        results = _dog_model.predict(source=image, verbose=False, conf=0.25)
-        dog_confidence = max((float(box.conf.item()) for box in results[0].boxes), default=0.0)
-        dog_detected = dog_confidence >= 0.25
-    verified = predicted == activity and expected_score >= threshold and margin >= min_margin and dog_detected is not False
+    # 1) 이미 포인트를 받은 사진(재압축·크기 변경 포함)을 다시 올렸는지
+    with db_connection() as db:
+        used_hashes = [row["perceptual_hash"] for row in db.execute("""SELECT i.perceptual_hash FROM activity_logs a JOIN images i ON i.id=a.image_id
+            WHERE a.user_id=? AND a.status='verified' AND i.perceptual_hash<>''""", (user_id,)).fetchall()]
+    duplicate = any(verification.hamming_distance(photo_hash, used) <= DUPLICATE_HASH_DISTANCE for used in used_hashes)
+    fraud_checks.append({"key": "duplicate", "label": "새로운 사진", "passed": not duplicate,
+                         "detail": "이미 인증에 사용한 사진이에요." if duplicate else "처음 제출한 사진이에요."})
+    # 2) 촬영 시각. 브라우저가 EXIF를 지우는 경우가 많아 정보가 없으면 통과시키고 기록만 남긴다.
+    stale = taken_at is not None and datetime.now() - taken_at > timedelta(hours=MAX_PHOTO_AGE_HOURS)
+    fraud_checks.append({"key": "taken_at", "label": f"최근 {MAX_PHOTO_AGE_HOURS}시간 내 촬영", "passed": None if taken_at is None else not stale,
+                         "detail": "촬영 시각 정보가 없어요." if taken_at is None else f"촬영 {taken_at:%Y-%m-%d %H:%M}"})
 
+    if duplicate or stale:
+        decision, analysis = None, None
+        verified = False
+        checks = fraud_checks
+        message = "이미 인증에 사용한 사진이에요. 새로 촬영해 주세요." if duplicate else f"{MAX_PHOTO_AGE_HOURS}시간 이내에 촬영한 사진만 인증할 수 있어요."
+    else:
+        decision, analysis = await run_in_threadpool(verification.verifier.verify, activity, image)
+        verified = decision.verified
+        checks = decision.checks + fraud_checks
+        message = decision.message
+
+    # 3) 하루 보상 횟수 (서버 현지 날짜 기준)
+    local_midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = local_midnight.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    details = {
+        "checks": checks,
+        "scores": analysis.activity_scores if analysis else None,
+        "outdoor": analysis.outdoor if analysis else None,
+        "leash": analysis.leash if analysis else None,
+        "detections": [d.to_dict() for d in analysis.detections] if analysis and analysis.detections is not None else None,
+        "sources": analysis.sources if analysis else [],
+        "photo_taken_at": taken_at.isoformat() if taken_at else None,
+    }
+    points_awarded = 0
     with transaction() as db:
-        image_id = _store_image(db, int(user["id"]), f"verification_{activity}", photo.filename or "photo", mime, data)
-        cursor = db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,confidence,margin,image_id)
-            SELECT ?,id,?,?,?,?,?,? FROM pets WHERE user_id=?""",
-            (user["id"], activity, "verified" if verified else "rejected", predicted, expected_score, margin, image_id, user["id"]))
-        if verified:
-            points = 100 if activity == "walk" else 50
-            balance = _award_points(db, int(user["id"]), points, f"{ACTIVITY_LABELS[activity]} 인증", f"activity:{cursor.lastrowid}")
+        image_id = _store_image(db, user_id, f"verification_{activity}", photo.filename or "photo", mime, data, photo_hash)
+        rewarded_today = db.execute("""SELECT COUNT(*) AS count FROM points_ledger WHERE user_id=? AND reason=? AND delta>0 AND created_at>=?""",
+                                    (user_id, f"{label} 인증", day_start)).fetchone()["count"]
+        cursor = db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,confidence,margin,image_id,details_json)
+            SELECT ?,id,?,?,?,?,?,?,? FROM pets WHERE user_id=?""",
+            (user_id, activity, "verified" if verified else "rejected", decision.predicted if decision else "",
+             decision.confidence if decision else None, decision.margin if decision else None, image_id,
+             json.dumps(details, ensure_ascii=False), user_id))
+        if verified and rewarded_today < DAILY_REWARD_LIMITS[activity]:
+            points_awarded = ACTIVITY_POINTS[activity]
+            balance = _award_points(db, user_id, points_awarded, f"{label} 인증", f"activity:{cursor.lastrowid}")
         else:
-            balance = None
+            row = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user_id,)).fetchone()
+            balance = int(row["balance"]) if row else 0
+    if verified and not points_awarded:
+        message += f" 오늘 {label} 포인트는 {DAILY_REWARD_LIMITS[activity]}회 모두 받았어요."
 
     return {
-        "verified": verified, "activity": activity, "activity_label": ACTIVITY_LABELS[activity],
-        "predicted": predicted, "confidence": round(expected_score, 4), "margin": round(margin, 4),
-        "dog_detected": dog_detected, "dog_confidence": round(dog_confidence, 4) if dog_confidence is not None else None,
-        "scores": {key: round(value, 4) for key, value in scores.items()}, "points_awarded": (100 if activity == "walk" else 50) if verified else 0,
-        "balance": balance, "message": "인증되었습니다." if verified else "사진에서 요청한 활동을 충분히 확인하지 못했습니다."
+        "verified": verified, "activity": activity, "activity_label": label,
+        "predicted": decision.predicted if decision else None,
+        "confidence": round(decision.confidence, 4) if decision else None,
+        "margin": round(decision.margin, 4) if decision else None,
+        "dog_detected": None if not decision or decision.dog_confidence is None else any(c["key"] == "dog" and c["passed"] for c in decision.checks),
+        "dog_confidence": round(decision.dog_confidence, 4) if decision and decision.dog_confidence is not None else None,
+        "scores": {key: round(value, 4) for key, value in analysis.activity_scores.items()} if analysis else {},
+        "checks": checks, "points_awarded": points_awarded, "balance": balance, "message": message,
     }
 
 

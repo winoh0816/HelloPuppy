@@ -208,9 +208,27 @@ function previewVerificationPhoto(event, activity) {
     if (status) status.textContent = "사진이 선택되었습니다. AI 검증을 진행해 주세요.";
 }
 
+// 서버가 돌려준 판정 근거(checks)를 통과/실패/참고로 나눠 보여준다.
+function renderVerificationResult(activity, result) {
+    const container = document.getElementById(`${activity}-result`);
+    if (!container) return;
+    const icon = (passed) => passed === true ? "✓" : passed === false ? "✕" : "·";
+    const state = (passed) => passed === true ? "is-pass" : passed === false ? "is-fail" : "is-info";
+    const checks = (result.checks || []).map((check) => `<li class="${state(check.passed)}">
+        <span class="verify-check-icon" aria-hidden="true">${icon(check.passed)}</span>
+        <span><strong>${escapeShopText(check.label)}</strong><small>${escapeShopText(check.detail || "")}</small></span></li>`).join("");
+    container.hidden = false;
+    container.className = `verify-result ${result.verified ? "is-verified" : "is-rejected"}`;
+    container.innerHTML = `<div class="verify-result-head"><strong>${result.verified ? "인증 성공" : "인증 실패"}</strong>
+        <span>${result.points_awarded ? `+${result.points_awarded}P` : "0P"}</span></div>
+        <p>${escapeShopText(result.message || "")}</p>${checks ? `<ul>${checks}</ul>` : ""}`;
+}
+
 async function verifyActivityPhoto(activity, inputId, statusId) {
     const input = document.getElementById(inputId);
     const status = document.getElementById(statusId);
+    const resultBox = document.getElementById(`${activity}-result`);
+    if (resultBox) resultBox.hidden = true;
     const file = input?.files?.[0];
     if (!file) { if (status) status.textContent = "먼저 인증할 사진을 촬영해 주세요."; return; }
     if (!requireAccount()) return;
@@ -237,16 +255,18 @@ async function verifyActivityPhoto(activity, inputId, statusId) {
             if (message) message.textContent = note;
             return;
         }
+        renderVerificationResult(activity, result);
         if (!result.verified) {
             const note = result.message || "요청한 활동을 사진에서 확인하지 못했습니다.";
-            if (status) status.textContent = `${note} 포인트는 적립되지 않았습니다.`;
+            if (status) status.textContent = "포인트는 적립되지 않았습니다. 아래 확인 항목을 참고해 다시 촬영해 주세요.";
             if (message) message.textContent = note;
             return;
         }
-        const success = `인증 성공! ${result.points_awarded}P가 DB에 적립되었습니다. (현재 ${Number(result.balance).toLocaleString("ko-KR")}P)`;
+        const success = result.points_awarded
+            ? `인증 성공! ${result.points_awarded}P 적립 (현재 ${Number(result.balance).toLocaleString("ko-KR")}P)`
+            : result.message;
         if (status) status.textContent = success;
         if (message) message.textContent = success;
-        window.setTimeout(() => { window.location.href = "feed.html"; }, 1400);
     } catch (error) {
         const note = error instanceof Error ? error.message : "인증 중 오류가 발생했습니다.";
         if (status) status.textContent = `${note} 포인트는 적립되지 않았습니다.`;
