@@ -2581,7 +2581,447 @@ p {
     font-size: 12px;
 }
 
+/* 산책·급여 AI 인증 결과 */
+.verify-result {
+    margin-top: 14px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: #fff;
+    font-size: 12px;
+}
+
+.verify-result[hidden] {
+    display: none;
+}
+
+.verify-result.is-verified {
+    border-color: #cfe3c4;
+    background: #f6fbf2;
+}
+
+.verify-result.is-rejected {
+    border-color: #f4d3c9;
+    background: #fff7f3;
+}
+
+.verify-result-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+}
+
+.verify-result.is-verified .verify-result-head span {
+    color: #4f8a3a;
+    font-weight: 900;
+}
+
+.verify-result p {
+    margin: 6px 0 10px;
+    color: #6f5e53;
+    line-height: 1.5;
+}
+
+.verify-result ul {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.verify-result li {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.verify-result li small {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.verify-check-icon {
+    display: grid;
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+    place-items: center;
+    border-radius: 50%;
+    background: #eee8e1;
+    color: #8a786d;
+    font-weight: 900;
+}
+
+.verify-result li.is-pass .verify-check-icon {
+    background: #dcefd2;
+    color: #3f7a2c;
+}
+
+.verify-result li.is-fail .verify-check-icon {
+    background: #fbdcd3;
+    color: #c0392b;
+}
+
+/* 건강기록 EHR 연계: 병원 공유, 문진표, 진료 전 확인 정보, 예방 일정 */
+.health-form-grid + .health-form-grid {
+    margin-top: 10px;
+}
+
+.health-form-hint {
+    margin: 8px 0 0;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.5;
+}
+
+.health-form label.health-check-label {
+    flex-direction: row;
+    align-items: center;
+    align-self: end;
+    min-height: 39px;
+}
+
+.health-form label.health-check-label input {
+    width: auto;
+    min-height: 0;
+}
+
+.health-flow {
+    margin: 0 0 12px;
+    padding-left: 18px;
+    color: #6f5e53;
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.health-flow em {
+    color: var(--coral-deep);
+    font-style: normal;
+    font-weight: 800;
+}
+
+.health-share-result {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px dashed #f0b9a6;
+    border-radius: 14px;
+    background: #fff6f0;
+    font-size: 11px;
+}
+
+.health-share-result p {
+    margin: 4px 0 8px;
+    color: var(--muted);
+}
+
+.health-share-result input {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid #e9dfd6;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 11px;
+}
+
+.health-share-list ul,
+.health-preventive-list,
+.health-system-list,
+.health-alert-box ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.health-share-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 10px 11px;
+    border: 1px solid #eee8df;
+    border-radius: 13px;
+    background: #fffdf9;
+}
+
+.health-share-list li.is-expired,
+.health-share-list li.is-revoked {
+    opacity: .55;
+}
+
+.health-share-list strong {
+    font-size: 12px;
+}
+
+.health-share-list small {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.health-fhir-btn {
+    width: 100%;
+    margin-top: 12px;
+}
+
+.health-registration-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 0 0;
+    font-size: 11px;
+}
+
+.health-registration-line span {
+    color: var(--muted);
+}
+
+.health-registration-line strong {
+    overflow-wrap: anywhere;
+}
+
+.health-profile-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.health-note-grid .health-note-wide {
+    grid-column: 1 / -1;
+}
+
+.health-record-badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+}
+
+.health-source-badge {
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: #f2ede7;
+    color: #8a786d;
+    font-size: 9px;
+}
+
+.health-source-badge.is-clinic {
+    background: #e6f0fb;
+    color: #2f5d8a;
+    font-weight: 800;
+}
+
+.health-record-clinic {
+    margin: 0 0 3px;
+}
+
+.health-detail-list {
+    display: grid;
+    gap: 3px;
+    margin: 5px 0;
+    font-size: 10px;
+}
+
+.health-detail-list > div {
+    display: grid;
+    grid-template-columns: minmax(78px, 34%) 1fr;
+    gap: 8px;
+}
+
+.health-detail-list dt {
+    color: var(--muted);
+}
+
+.health-detail-list dd {
+    margin: 0;
+    color: #5f4f45;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.health-record-image {
+    display: block;
+    max-width: 100%;
+    max-height: 220px;
+    margin-top: 7px;
+    border-radius: 10px;
+    object-fit: contain;
+    background: #f7f2ec;
+}
+
+.health-questionnaire-card {
+    margin-bottom: 8px;
+    padding: 12px;
+    border: 1px solid #f0e2d6;
+    border-radius: 14px;
+    background: #fffaf5;
+}
+
+.health-questionnaire-head {
+    display: flex;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.health-questionnaire-card h3 {
+    margin: 4px 0;
+    font-size: 13px;
+    white-space: pre-wrap;
+}
+
+.health-system-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+    margin-top: 6px;
+}
+
+.health-system-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 9px;
+    background: #fff;
+    font-size: 10px;
+}
+
+.health-system-list li span {
+    color: var(--muted);
+}
+
+.health-system-list li.is-flagged {
+    background: #fff0eb;
+    color: #b54a35;
+}
+
+.health-system-fieldset {
+    margin: 0;
+    padding: 10px;
+    border: 1px solid #efe5dc;
+    border-radius: 12px;
+}
+
+.health-system-fieldset legend {
+    padding: 0 5px;
+    color: #78675c;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.health-system-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.health-alert-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.health-alert-box {
+    padding: 10px;
+    border-radius: 13px;
+    background: #fbf8f2;
+    font-size: 11px;
+}
+
+.health-alert-box.health-alert-allergy {
+    background: #fff0eb;
+}
+
+.health-alert-box h3 {
+    margin: 0 0 6px;
+    font-size: 11px;
+}
+
+.health-alert-box p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.health-alert-box li + li {
+    margin-top: 6px;
+}
+
+.health-alert-box li small {
+    display: block;
+    color: var(--muted);
+    font-size: 9px;
+}
+
+.health-alert-box .health-clinic-mark {
+    color: #2f5d8a;
+    font-weight: 800;
+}
+
+.health-preventive-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+}
+
+.health-preventive-list li:last-child {
+    border-bottom: 0;
+}
+
+.health-preventive-list strong,
+.health-preventive-list small {
+    display: block;
+}
+
+.health-preventive-list small,
+.health-due span {
+    color: var(--muted);
+    font-size: 9px;
+}
+
+.health-due {
+    flex: 0 0 auto;
+    text-align: right;
+}
+
+.health-preventive-list li.is-soon .health-due strong {
+    color: #b7791f;
+}
+
+.health-preventive-list li.is-overdue .health-due strong {
+    color: #c0392b;
+}
+
+.vet-share-app {
+    padding-bottom: 24px;
+}
+
+.vet-share-banner h2 {
+    margin-top: 4px;
+}
+
+.vet-share-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.vet-share-actions button {
+    flex: 1;
+}
+
 @media (max-width: 380px) {
+    .health-alert-grid,
+    .health-system-grid,
+    .health-system-list {
+        grid-template-columns: 1fr;
+    }
+
     .health-intro {
         align-items: flex-start;
         padding: 15px 12px;
@@ -2629,7 +3069,9 @@ p {
     .health-text-btn,
     .health-add-btn,
     .health-delete-btn,
-    .health-form {
+    .health-form,
+    .health-share-section,
+    .vet-share-actions {
         display: none !important;
     }
 

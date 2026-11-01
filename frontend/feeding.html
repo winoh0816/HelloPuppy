@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#fffaf5">
     <title>안녕멍뭉 - 식사/급여 인증</title>
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=verify-1">
 </head>
 
 <body>
@@ -79,7 +79,7 @@
                 margin-top:12px;
             "
         >
-            사료를 급여하는 장면이나 급여한 사료가 보이도록 촬영해 주세요.
+            강아지가 밥그릇의 사료를 먹는 장면을 촬영해 주세요.
         </p>
 
         <!-- AI 검증 -->
@@ -92,13 +92,15 @@
             사진 AI 인증하기
         </button>
 
+        <div id="feeding-result" class="verify-result" role="status" hidden></div>
+
         <div class="card" style="margin-top:20px">
             <strong>📌 인증 안내</strong>
             <p class="muted">
-                1. 반려견의 사료 급여 장면을 촬영합니다.<br>
-                2. 촬영한 사진을 확인합니다.<br>
-                3. AI 검증을 진행합니다.<br>
-                4. 인증 성공 시 50P를 적립합니다.
+                1. 반려견이 밥그릇의 사료를 먹는 장면을 촬영합니다.<br>
+                2. <b>강아지와 밥그릇이 한 화면에</b> 함께 보이게 찍어 주세요.<br>
+                3. AI(CLIP 장면 분석 + 객체 탐지)가 급여 장면과 그릇 위치를 확인합니다.<br>
+                4. 인증 성공 시 50P를 적립합니다. (하루 3회까지, 이미 인증한 사진 재사용 불가)
             </p>
         </div>
 
@@ -135,7 +137,7 @@
     </div>
 
     <script src="assets/js/api-client.js"></script>
-    <script src="assets/js/app.js"></script>
+    <script src="assets/js/app.js?v=verify-1"></script>
 
 </div>
 </body>

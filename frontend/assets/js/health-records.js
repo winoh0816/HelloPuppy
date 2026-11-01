@@ -1,142 +1,131 @@
-/* Health records are owned by the authenticated user and persisted by the SQLite API. */
+/* 보호자 건강기록(PHR) 화면. 기록은 로그인 계정에 저장되고, 병원별 기한부 링크와 FHIR 파일로 다른 병원에 전달한다. */
 (function () {
     "use strict";
 
-    const TYPE_LABELS = { visit: "병원 방문", vaccination: "예방접종", medication: "복용 약", symptom: "증상·관찰", weight: "체중 측정", other: "기타" };
+    const H = window.HelloPuppyHealth;
+    const escapeHtml = H.escapeHtml;
     const profileForm = document.getElementById("petProfileForm");
     const foodForm = document.getElementById("foodForm");
     const recordForm = document.getElementById("healthRecordForm");
-    let profile = {};
-    let food = {};
-    let records = [];
-    let activities = [];
-
-    function escapeHtml(value) {
-        return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
-    }
+    const questionnaireForm = document.getElementById("questionnaireForm");
+    const shareForm = document.getElementById("shareForm");
+    const recordTypeSelect = document.getElementById("recordTypeSelect");
+    let summary = { pet: {}, food: {}, records: [], questionnaires: [], activity: [] };
+    let shares = [];
 
     function api(path, options) { return window.HelloPuppyAPI.request(path, options); }
     function jsonBody(value) { return JSON.stringify(value); }
     function formData(form) { return Object.fromEntries(new FormData(form).entries()); }
+    function loadOwnImage(imageId) { return window.HelloPuppyAPI.imageUrl(imageId); }
 
-    function formatDate(value) {
-        if (!value) return "날짜 미입력";
-        const date = new Date(`${value}T00:00:00`);
-        return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("ko-KR").format(date);
-    }
-
-    function calculateAge(birthDate) {
-        if (!birthDate) return "미입력";
-        const birth = new Date(`${birthDate}T00:00:00`);
-        if (Number.isNaN(birth.getTime()) || birth > new Date()) return "확인 필요";
-        let years = new Date().getFullYear() - birth.getFullYear();
-        let months = new Date().getMonth() - birth.getMonth();
-        if (new Date().getDate() < birth.getDate()) months -= 1;
-        if (months < 0) { years -= 1; months += 12; }
-        if (years < 1) return `${Math.max(0, months)}개월`;
-        return months > 0 ? `${years}세 ${months}개월` : `${years}세`;
-    }
-
-    function renderProfile() {
-        const summary = document.getElementById("petProfileSummary");
-        if (!profile.name) {
-            summary.innerHTML = '<div class="health-empty"><strong>아직 기본 정보가 없습니다.</strong><span>반려견 정보를 입력하면 병원에 보여줄 요약이 여기에 표시됩니다.</span></div>';
-            return;
-        }
-        const sex = profile.sex === "female" ? "암컷" : profile.sex === "male" ? "수컷" : "미입력";
-        const neutered = profile.neutered === "yes" ? "완료" : profile.neutered === "no" ? "미완료" : "미입력";
-        summary.innerHTML = `
-            <div class="health-pet-title"><div class="health-pet-avatar"><img src="assets/images/brand/puppy-app-icon.png" alt=""></div><div><h3>${escapeHtml(profile.name)}</h3><span>${escapeHtml(profile.breed || "견종 미입력")} · ${escapeHtml(calculateAge(profile.birth_date))}</span></div><span class="health-demo-tag">계정 저장</span></div>
-            <div class="health-profile-grid"><div><span>성별</span><strong>${sex}</strong></div><div><span>중성화</span><strong>${neutered}</strong></div><div><span>체중</span><strong>${profile.weight_kg ? `${escapeHtml(profile.weight_kg)} kg` : "미입력"}</strong></div><div><span>마이크로칩</span><strong>${escapeHtml(profile.microchip_id || "미입력")}</strong></div></div>
-            <div class="health-note-grid"><div><span>알레르기·주의사항</span><p>${escapeHtml(profile.allergies || "기록 없음")}</p></div><div><span>만성질환·과거 병력</span><p>${escapeHtml(profile.medical_notes || "기록 없음")}</p></div></div>
-            <div class="health-guardian-line">보호자: ${escapeHtml(profile.guardian_name || "미입력")} · 연락처: ${escapeHtml(profile.guardian_phone || "미입력")}</div>`;
+    async function uploadHealthPhoto(form) {
+        const file = form.elements.namedItem("photo")?.files?.[0];
+        if (!file) return null;
+        const body = new FormData();
+        body.append("photo", file);
+        const result = await api("/api/uploads?purpose=health", { method: "POST", body });
+        return result.image_id;
     }
 
     function openForm(form, data) {
         form.reset();
-        if (data) {
-            Object.entries(data).forEach(([key, value]) => {
-                const field = form.elements.namedItem(key);
-                if (field) field.value = value ?? "";
-            });
-        }
+        Object.entries(data || {}).forEach(([key, value]) => {
+            const field = form.elements.namedItem(key);
+            if (!field) return;
+            if (field.type === "checkbox") field.checked = Boolean(value);
+            else field.value = value ?? "";
+        });
         form.hidden = false;
         form.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
-    function renderFood() {
-        document.getElementById("foodSummary").textContent = food.food_name || "아직 입력되지 않았어요";
-        const meals = food.meals_per_day ? `하루 ${food.meals_per_day}회` : "급여 횟수 미입력";
-        const schedule = food.feeding_schedule || "평소 시간 미입력";
-        const notes = food.food_notes ? ` · ${food.food_notes}` : "";
-        document.getElementById("feedingScheduleSummary").textContent = `${meals} · ${schedule}${notes}`;
+    function renderAll() {
+        const records = summary.records || [];
+        document.getElementById("petProfileSummary").innerHTML = H.renderProfile(summary.pet);
+        const questionnaireList = document.getElementById("questionnaireList");
+        questionnaireList.innerHTML = summary.questionnaires.length
+            ? summary.questionnaires.slice(0, 3).map((item) => H.renderQuestionnaire(item, { deletable: true })).join("")
+            : H.renderQuestionnaire(null);
+        document.getElementById("clinicalAlerts").innerHTML = H.renderClinicalAlerts(records);
+        document.getElementById("preventiveSummary").innerHTML = H.renderPreventive(records);
+        document.getElementById("foodSummary").innerHTML = H.renderDiet(summary.food);
+        const stats = H.activityStats(summary.activity);
+        document.getElementById("walkFrequency").textContent = stats.walkCount;
+        document.getElementById("walkDays").textContent = stats.walkDetail;
+        document.getElementById("feedingFrequency").textContent = stats.feedingCount;
+        document.getElementById("feedingTime").textContent = stats.feedingDetail;
+        const list = document.getElementById("healthRecordList");
+        list.innerHTML = records.length
+            ? records.map((record) => H.renderRecordCard(record, { deletable: true })).join("")
+            : '<div class="health-empty"><strong>등록된 건강 기록이 없습니다.</strong><span>진료, 예방접종, 복용 약, 알레르기, 체중 등을 기록해 보세요.</span></div>';
+        H.hydrateImages(document.querySelector(".health-content"), loadOwnImage);
     }
 
-    function renderActivity() {
-        const walk = activities.filter((item) => item.activity === "walk" && item.status === "verified");
-        const feeding = activities.filter((item) => item.activity === "feeding" && item.status === "verified");
-        const walkDays = new Set(walk.map((item) => new Date(item.created_at).toLocaleDateString("ko-KR"))).size;
-        document.getElementById("walkFrequency").textContent = walk.length ? `${walk.length}회` : "기록 없음";
-        document.getElementById("walkDays").textContent = walk.length ? `주 평균 ${(walk.length / 30 * 7).toFixed(1)}회 · 산책한 날 ${walkDays}일` : "AI 인증 기록이 쌓이면 표시됩니다";
-        document.getElementById("feedingFrequency").textContent = feeding.length ? `${feeding.length}회` : "기록 없음";
-        if (!feeding.length) {
-            document.getElementById("feedingTime").textContent = "AI 인증 기록이 쌓이면 표시됩니다";
-            return;
-        }
-        const counts = new Map();
-        feeding.forEach((item) => {
-            const hour = new Date(item.created_at).getHours();
-            const bucket = hour < 11 ? "오전" : hour < 16 ? "오후" : "저녁";
-            counts.set(bucket, (counts.get(bucket) || 0) + 1);
-        });
-        const [bucket, count] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-        document.getElementById("feedingTime").textContent = `주 평균 ${(feeding.length / 30 * 7).toFixed(1)}회 · 주로 ${bucket} ${count}회`;
+    function shareUrl(token) {
+        const url = new URL("vet-share.html", window.location.href);
+        url.hash = `token=${encodeURIComponent(token)}`;
+        return url.toString();
     }
 
-    function renderRecords() {
-        const container = document.getElementById("healthRecordList");
-        if (!records.length) {
-            container.innerHTML = '<div class="health-empty"><strong>등록된 건강 기록이 없습니다.</strong><span>예방접종, 병원 방문, 복용 약 등을 직접 기록할 수 있습니다.</span></div>';
-            return;
-        }
-        container.innerHTML = records.map((record) => `
-            <article class="health-record-card"><div class="health-record-date">${escapeHtml(formatDate(record.record_date))}</div><div class="health-record-main"><span class="health-record-type">${escapeHtml(TYPE_LABELS[record.record_type] || "기타")}</span><h3>${escapeHtml(record.title || TYPE_LABELS[record.record_type] || "건강 기록")}</h3><p>${escapeHtml(record.clinic || "기관 미입력")}${record.notes ? ` · ${escapeHtml(record.notes)}` : ""}</p></div><button type="button" class="health-delete-btn" data-delete-record="${record.id}" aria-label="이 기록 삭제">삭제</button></article>`).join("");
+    function renderShares() {
+        const active = shares.filter((share) => share.status === "active");
+        const inactive = shares.filter((share) => share.status !== "active").slice(0, 5);
+        const scopeLabel = (scope) => scope === "read_write" ? "열람 + 진료기록 입력" : "열람만";
+        const statusLabel = { active: "사용 중", expired: "만료", revoked: "취소됨" };
+        const item = (share) => `<li class="is-${share.status}">
+            <div><strong>${escapeHtml(share.clinic_name)}</strong><small>${scopeLabel(share.scope)} · ${statusLabel[share.status]} · ${share.status === "active" ? `${escapeHtml(H.formatDateTime(share.expires_at))}까지` : escapeHtml(H.formatDateTime(share.created_at))}</small>
+            <small>열람·입력 ${Number(share.access_count)}회${share.last_accessed_at ? ` · 최근 ${escapeHtml(H.formatDateTime(share.last_accessed_at))}` : ""}</small></div>
+            ${share.status === "active" ? `<button type="button" class="health-delete-btn" data-revoke-share="${Number(share.id)}">공유 취소</button>` : ""}
+        </li>`;
+        document.getElementById("shareList").innerHTML = shares.length
+            ? `<ul>${active.map(item).join("")}${inactive.map(item).join("")}</ul>`
+            : '<p class="health-form-hint">아직 만든 공유 링크가 없어요.</p>';
     }
 
     async function refresh() {
-        const [petResult, foodResult, recordResult, activityResult] = await Promise.all([
-            api("/api/pet/profile"), api("/api/pet/food"), api("/api/health/records"), api("/api/activity/logs?days=30")
-        ]);
-        profile = petResult.profile || {};
-        food = foodResult.food || {};
-        records = recordResult.items || [];
-        activities = activityResult.items || [];
-        renderProfile(); renderFood(); renderRecords(); renderActivity();
+        const [summaryResult, shareResult] = await Promise.all([api("/api/health/summary"), api("/api/health/shares")]);
+        summary = summaryResult.summary;
+        shares = shareResult.items || [];
+        renderAll();
+        renderShares();
     }
 
-    document.getElementById("editProfileButton").addEventListener("click", () => openForm(profileForm, {
-        name: profile.name, breed: profile.breed, birth_date: profile.birth_date, sex: profile.sex,
-        weight_kg: profile.weight_kg, neutered: profile.neutered, guardian_name: profile.guardian_name,
-        guardian_phone: profile.guardian_phone, microchip_id: profile.microchip_id, allergies: profile.allergies, medical_notes: profile.medical_notes
-    }));
+    // 기록 종류 선택에 따라 입력 항목을 바꾼다.
+    recordTypeSelect.innerHTML = Object.entries(H.RECORD_TYPES).map(([value, type]) => `<option value="${value}">${escapeHtml(type.label)}</option>`).join("");
+    recordTypeSelect.addEventListener("change", () => H.renderTypeFields(document.getElementById("recordTypeFields"), recordTypeSelect.value));
+    document.getElementById("systemFields").innerHTML = Object.entries(H.QUESTIONNAIRE_SYSTEMS).map(([key, label]) => `
+        <label>${escapeHtml(label)}<select name="system.${key}"><option value="">-</option>${Object.entries(H.SYSTEM_VALUES).map(([value, text]) => `<option value="${value}">${escapeHtml(text)}</option>`).join("")}</select></label>`).join("");
+
+    document.getElementById("editProfileButton").addEventListener("click", () => openForm(profileForm, summary.pet));
     document.getElementById("cancelProfileButton").addEventListener("click", () => { profileForm.hidden = true; });
-    document.getElementById("editFoodButton").addEventListener("click", () => openForm(foodForm, food));
+    document.getElementById("editFoodButton").addEventListener("click", () => openForm(foodForm, summary.food));
     document.getElementById("cancelFoodButton").addEventListener("click", () => { foodForm.hidden = true; });
-    document.getElementById("addRecordButton").addEventListener("click", () => openForm(recordForm, { record_date: new Date().toISOString().slice(0, 10) }));
+    document.getElementById("addRecordButton").addEventListener("click", () => {
+        openForm(recordForm, { record_type: "visit", record_date: H.today() });
+        H.renderTypeFields(document.getElementById("recordTypeFields"), "visit");
+    });
     document.getElementById("cancelRecordButton").addEventListener("click", () => { recordForm.hidden = true; });
+    document.getElementById("addQuestionnaireButton").addEventListener("click", () => openForm(questionnaireForm, { visit_date: H.today() }));
+    document.getElementById("cancelQuestionnaireButton").addEventListener("click", () => { questionnaireForm.hidden = true; });
+    document.getElementById("addShareButton").addEventListener("click", () => openForm(shareForm, { hours: "24", scope: "read" }));
+    document.getElementById("cancelShareButton").addEventListener("click", () => { shareForm.hidden = true; });
 
     profileForm.addEventListener("submit", async (event) => {
         event.preventDefault();
         try {
             const data = formData(profileForm);
             const payload = {
-                name: data.name, breed: data.breed, birth_date: data.birth_date, sex: data.sex,
-                weight_kg: data.weight_kg ? Number(data.weight_kg) : null, neutered: data.neutered,
-                guardian_name: data.guardian_name, guardian_phone: data.guardian_phone, microchip_id: data.microchip_id,
+                name: data.name, species: data.species, breed: data.breed, coat_features: data.coat_features,
+                birth_date: data.birth_date, birth_date_estimated: Boolean(data.birth_date_estimated), sex: data.sex,
+                neutered: data.neutered, weight_kg: data.weight_kg ? Number(data.weight_kg) : null, blood_type: data.blood_type,
+                microchip_id: data.microchip_id, registration_type: data.registration_type, living_environment: data.living_environment,
+                other_pets: data.other_pets, guardian_name: data.guardian_name, guardian_phone: data.guardian_phone,
                 allergies: data.allergies, medical_notes: data.medical_notes
             };
             const result = await api("/api/pet/profile", { method: "PUT", body: jsonBody(payload) });
-            profile = result.profile; profileForm.hidden = true; renderProfile();
+            summary.pet = { ...result.profile, birth_date_estimated: Boolean(result.profile.birth_date_estimated) };
+            profileForm.hidden = true;
+            renderAll();
         } catch (error) { alert(error.message); }
     });
 
@@ -145,28 +134,101 @@
         try {
             const data = formData(foodForm);
             const result = await api("/api/pet/food", { method: "PUT", body: jsonBody({
-                food_name: data.food_name, meals_per_day: data.meals_per_day ? Number(data.meals_per_day) : null,
-                feeding_schedule: data.feeding_schedule, food_notes: data.food_notes
+                ...data, meals_per_day: data.meals_per_day ? Number(data.meals_per_day) : null
             }) });
-            food = result.food; foodForm.hidden = true; renderFood();
+            summary.food = result.food;
+            foodForm.hidden = true;
+            renderAll();
         } catch (error) { alert(error.message); }
     });
 
     recordForm.addEventListener("submit", async (event) => {
         event.preventDefault();
+        const button = recordForm.querySelector("[type=submit]");
+        button.disabled = true;
         try {
-            const result = await api("/api/health/records", { method: "POST", body: jsonBody(formData(recordForm)) });
-            records.unshift(result.record); recordForm.hidden = true; renderRecords();
+            const payload = H.collectRecordPayload(recordForm);
+            payload.image_id = await uploadHealthPhoto(recordForm);
+            await api("/api/health/records", { method: "POST", body: jsonBody(payload) });
+            recordForm.hidden = true;
+            await refresh();
+        } catch (error) { alert(error.message); }
+        finally { button.disabled = false; }
+    });
+
+    questionnaireForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = questionnaireForm.querySelector("[type=submit]");
+        button.disabled = true;
+        try {
+            const payload = { systems: {} };
+            new FormData(questionnaireForm).forEach((value, key) => {
+                if (value instanceof File) return;
+                if (key.startsWith("system.")) { if (value) payload.systems[key.slice(7)] = value; }
+                else payload[key] = String(value).trim();
+            });
+            payload.image_id = await uploadHealthPhoto(questionnaireForm);
+            await api("/api/health/questionnaires", { method: "POST", body: jsonBody(payload) });
+            questionnaireForm.hidden = true;
+            await refresh();
+        } catch (error) { alert(error.message); }
+        finally { button.disabled = false; }
+    });
+
+    shareForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+            const data = formData(shareForm);
+            const result = await api("/api/health/shares", { method: "POST", body: jsonBody({ ...data, hours: Number(data.hours) }) });
+            const link = shareUrl(result.token);
+            const box = document.getElementById("shareResult");
+            box.hidden = false;
+            box.innerHTML = `<strong>${escapeHtml(result.share.clinic_name)} 공유 링크가 만들어졌어요</strong>
+                <p>이 링크는 지금 한 번만 보여요. 병원에 바로 전달하세요.</p>
+                <input type="text" readonly value="${escapeHtml(link)}" aria-label="공유 링크">
+                <div class="health-form-actions"><button type="button" class="health-secondary-btn" id="copyShareLink">링크 복사</button>${navigator.share ? '<button type="button" class="health-primary-btn" id="sendShareLink">보내기</button>' : ""}</div>`;
+            box.querySelector("#copyShareLink").addEventListener("click", async () => {
+                try { await navigator.clipboard.writeText(link); alert("링크를 복사했어요."); }
+                catch (error) { box.querySelector("input").select(); }
+            });
+            box.querySelector("#sendShareLink")?.addEventListener("click", () => navigator.share({ title: "안녕멍뭉 건강기록", url: link }).catch(() => {}));
+            shareForm.hidden = true;
+            shares = (await api("/api/health/shares")).items || [];
+            renderShares();
         } catch (error) { alert(error.message); }
     });
 
-    document.getElementById("healthRecordList").addEventListener("click", async (event) => {
-        const button = event.target.closest("[data-delete-record]");
-        if (!button || !confirm("이 건강 기록을 삭제할까요?")) return;
+    document.getElementById("shareList").addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-revoke-share]");
+        if (!button || !confirm("이 병원 공유 링크를 취소할까요? 병원에서 더 이상 열람할 수 없게 됩니다.")) return;
         try {
-            await api(`/api/health/records/${button.dataset.deleteRecord}`, { method: "DELETE" });
-            records = records.filter((record) => String(record.id) !== button.dataset.deleteRecord);
-            renderRecords();
+            await api(`/api/health/shares/${button.dataset.revokeShare}`, { method: "DELETE" });
+            shares = (await api("/api/health/shares")).items || [];
+            renderShares();
+        } catch (error) { alert(error.message); }
+    });
+
+    document.getElementById("exportFhirButton").addEventListener("click", async () => {
+        try {
+            const bundle = await api("/api/health/export/fhir");
+            const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/fhir+json" });
+            const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `hellopuppy-fhir-${H.today()}.json` });
+            link.click();
+            URL.revokeObjectURL(link.href);
+        } catch (error) { alert(error.message); }
+    });
+
+    document.querySelector(".health-content").addEventListener("click", async (event) => {
+        const recordButton = event.target.closest("[data-delete-record]");
+        const questionnaireButton = event.target.closest("[data-delete-questionnaire]");
+        try {
+            if (recordButton && confirm("이 건강 기록을 삭제할까요?")) {
+                await api(`/api/health/records/${recordButton.dataset.deleteRecord}`, { method: "DELETE" });
+                await refresh();
+            } else if (questionnaireButton && confirm("이 문진표를 삭제할까요?")) {
+                await api(`/api/health/questionnaires/${questionnaireButton.dataset.deleteQuestionnaire}`, { method: "DELETE" });
+                await refresh();
+            }
         } catch (error) { alert(error.message); }
     });
 

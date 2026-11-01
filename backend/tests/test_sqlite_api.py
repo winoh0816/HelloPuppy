@@ -41,6 +41,166 @@ def test_community_upload_accepts_photos_over_12mb(tmp_path, monkeypatch):
     assert upload.status_code == 200
 
 
+class _UnavailableVerifier:
+    ready = False
+
+    def status(self):
+        return {"ready": False, "message": "테스트: 모델 없음", "trained_classifier": False, "object_detector": None}
+
+
+def _register(client, email: str) -> dict[str, str]:
+    registration = client.post("/api/auth/register", json={
+        "email": email, "password": "correct horse battery staple", "display_name": "보호자"
+    })
+    return {"Authorization": f"Bearer {registration.json()['access_token']}"}
+
+
+def test_structured_health_record_questionnaire_and_fhir_export(tmp_path, monkeypatch):
+    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "health.sqlite3"))
+
+    with TestClient(app) as client:
+        headers = _register(client, "health@example.test")
+        profile = client.put("/api/pet/profile", headers=headers, json={
+            "name": "초코", "breed": "말티즈", "sex": "female", "neutered": "yes", "birth_date": "2021-03-01",
+            "birth_date_estimated": True, "microchip_id": "410123456789012", "registration_type": "internal",
+            "coat_features": "흰색, 왼쪽 귀 갈색 반점", "living_environment": "indoor", "guardian_name": "지보호"
+        })
+        assert profile.status_code == 200
+        assert profile.json()["profile"]["registration_type"] == "internal"
+        assert client.put("/api/pet/profile", headers=headers, json={"name": "초코", "species": "lizard"}).status_code == 422
+        food = client.put("/api/pet/food", headers=headers, json={
+            "food_name": "연어 사료", "amount_per_meal": "40g", "treats": "고구마 말랭이", "diet_changed_date": "2026-10-01"
+        })
+        assert food.json()["food"]["treats"] == "고구마 말랭이"
+
+        vaccine = client.post("/api/health/records", headers=headers, json={
+            "record_type": "vaccination", "record_date": "2026-10-01", "clinic": "1번 동물병원",
+            "details": {"vaccine_type": "rabies", "next_due_date": "2027-10-01"}
+        })
+        assert vaccine.status_code == 200
+        assert vaccine.json()["record"]["details"] == {"vaccine_type": "rabies", "next_due_date": "2027-10-01"}
+        assert vaccine.json()["record"]["source"] == "guardian"
+        assert client.post("/api/health/records", headers=headers, json={
+            "record_type": "vaccination", "record_date": "2026-10-01", "details": {"vaccine_type": "unknown-vaccine"}
+        }).status_code == 422
+        assert client.post("/api/health/records", headers=headers, json={
+            "record_type": "medication", "record_date": "2026-10-01", "details": {"dose": "1정"}
+        }).status_code == 422
+        assert client.post("/api/health/records", headers=headers, json={
+            "record_type": "allergy", "record_date": "2026-10-01", "details": {"substance": "닭고기", "unexpected": "x"}
+        }).status_code == 422
+
+        weight = client.post("/api/health/records", headers=headers, json={
+            "record_type": "weight", "record_date": "2026-10-20", "details": {"weight_kg": "3.85", "body_condition_score": "5"}
+        })
+        assert weight.json()["record"]["details"] == {"weight_kg": 3.85, "body_condition_score": 5}
+        client.post("/api/health/records", headers=headers, json={
+            "record_type": "weight", "record_date": "2026-09-01", "details": {"weight_kg": 3.5}
+        })
+        assert client.get("/api/pet/profile", headers=headers).json()["profile"]["weight_kg"] == 3.85
+
+        upload = client.post("/api/uploads?purpose=health", headers=headers,
+                             files={"photo": ("lab.jpg", _jpeg_bytes(), "image/jpeg")})
+        lab = client.post("/api/health/records", headers=headers, json={
+            "record_type": "lab", "record_date": "2026-10-20", "image_id": upload.json()["image_id"],
+            "details": {"test_name": "혈액검사(CBC)", "abnormal_findings": "ALT 경도 상승"}
+        })
+        assert lab.status_code == 200
+
+        questionnaire = client.post("/api/health/questionnaires", headers=headers, json={
+            "visit_date": "2026-11-02", "clinic": "2번 동물병원", "chief_complaint": "이틀째 설사",
+            "progression": "worse", "systems": {"stool": "abnormal", "appetite": "decreased", "water": "normal"}
+        })
+        assert questionnaire.status_code == 200
+        assert questionnaire.json()["questionnaire"]["systems"]["stool"] == "abnormal"
+        assert client.post("/api/health/questionnaires", headers=headers, json={
+            "visit_date": "2026-11-02", "chief_complaint": "x", "systems": {"stool": "very-bad"}
+        }).status_code == 422
+
+        summary = client.get("/api/health/summary", headers=headers).json()["summary"]
+        assert summary["pet"]["birth_date_estimated"] is True
+        assert len(summary["records"]) == 4
+        assert len(summary["questionnaires"]) == 1
+
+        bundle = client.get("/api/health/export/fhir", headers=headers).json()
+        assert bundle["resourceType"] == "Bundle" and bundle["type"] == "collection"
+        resources = [entry["resource"] for entry in bundle["entry"]]
+        types = [resource["resourceType"] for resource in resources]
+        patient = resources[0]
+        assert patient["resourceType"] == "Patient"
+        assert patient["identifier"][0]["value"] == "410123456789012"
+        animal = {item["url"]: item for item in patient["extension"][0]["extension"]}
+        assert animal["species"]["valueCodeableConcept"]["coding"][0]["code"] == "448771007"
+        assert animal["genderStatus"]["valueCodeableConcept"]["coding"][0]["code"] == "neutered"
+        assert {"Immunization", "Observation", "DiagnosticReport", "QuestionnaireResponse"} <= set(types)
+        weights = [r for r in resources if r["resourceType"] == "Observation" and r.get("valueQuantity")]
+        assert sorted(r["valueQuantity"]["value"] for r in weights) == [3.5, 3.85]
+        assert all(entry["fullUrl"].startswith("urn:uuid:") for entry in bundle["entry"])
+
+
+def test_clinic_share_links_scope_revocation_and_isolation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "share.sqlite3"))
+
+    with TestClient(app) as client:
+        headers = _register(client, "owner@example.test")
+        other_headers = _register(client, "stranger@example.test")
+        client.put("/api/pet/profile", headers=headers, json={"name": "초코", "guardian_phone": "010-0000-0000"})
+        upload = client.post("/api/uploads?purpose=health", headers=headers,
+                             files={"photo": ("cert.jpg", _jpeg_bytes(), "image/jpeg")})
+        image_id = upload.json()["image_id"]
+        client.post("/api/health/records", headers=headers, json={
+            "record_type": "visit", "record_date": "2026-10-10", "clinic": "1번 동물병원", "image_id": image_id,
+            "details": {"reason": "구토", "diagnosis": "급성 위장염"}
+        })
+        assert client.post("/api/health/records", headers=other_headers, json={
+            "record_type": "other", "record_date": "2026-10-10", "image_id": image_id
+        }).status_code == 404
+
+        assert client.post("/api/health/shares", headers=headers, json={"clinic_name": "병원", "hours": 100}).status_code == 422
+        assert client.post("/api/health/shares", headers=headers, json={"clinic_name": "병원", "scope": "admin"}).status_code == 422
+        read_share = client.post("/api/health/shares", headers=headers, json={"clinic_name": "2번 동물병원", "scope": "read", "hours": 24})
+        assert read_share.status_code == 200
+        read_token = {"X-Health-Share-Token": read_share.json()["token"]}
+        write_share = client.post("/api/health/shares", headers=headers, json={"clinic_name": "1번 동물병원", "scope": "read_write", "hours": 1})
+        write_token = {"X-Health-Share-Token": write_share.json()["token"]}
+
+        assert client.get("/api/shared/health").status_code == 404
+        assert client.get("/api/shared/health", headers={"X-Health-Share-Token": "x" * 43}).status_code == 404
+        shared = client.get("/api/shared/health", headers=read_token)
+        assert shared.status_code == 200
+        assert shared.json()["share"]["clinic_name"] == "2번 동물병원"
+        assert shared.json()["summary"]["pet"]["name"] == "초코"
+        assert "user_id" not in shared.json()["summary"]["pet"]
+        assert client.get(f"/api/shared/health/images/{image_id}", headers=read_token).status_code == 200
+        assert client.get("/api/shared/health/fhir", headers=read_token).json()["resourceType"] == "Bundle"
+
+        clinic_record = {"record_type": "medication", "record_date": "2026-11-01", "author_name": "김수의",
+                         "author_license": "12345", "details": {"drug_name": "메트로니다졸", "dose": "1/2정", "frequency": "1일 2회"}}
+        assert client.post("/api/shared/health/records", headers=read_token, json=clinic_record).status_code == 403
+        written = client.post("/api/shared/health/records", headers=write_token, json={**clinic_record, "clinic": "위조 병원"})
+        assert written.status_code == 200
+        assert written.json()["record"]["source"] == "clinic"
+        assert written.json()["record"]["clinic"] == "1번 동물병원"
+        assert client.post("/api/shared/health/records", headers=write_token, json={**clinic_record, "image_id": image_id}).status_code == 422
+
+        # 2번 병원은 1번 병원이 입력한 처방을 같은 링크 화면에서 바로 확인한다.
+        records = client.get("/api/shared/health", headers=read_token).json()["summary"]["records"]
+        assert any(r["source"] == "clinic" and r["author_name"] == "김수의" for r in records)
+        assert client.get("/api/health/shares", headers=other_headers).json()["items"] == []
+
+        shares = {item["id"]: item for item in client.get("/api/health/shares", headers=headers).json()["items"]}
+        assert shares[read_share.json()["share"]["id"]]["access_count"] == 3
+        share_id = read_share.json()["share"]["id"]
+        assert client.delete(f"/api/health/shares/{share_id}", headers=other_headers).status_code == 404
+        assert client.delete(f"/api/health/shares/{share_id}", headers=headers).status_code == 200
+        assert client.get("/api/shared/health", headers=read_token).status_code == 404
+        assert client.get("/api/health/shares", headers=headers).json()["items"][-1]["status"] == "revoked"
+
+        with database.transaction() as db:
+            db.execute("UPDATE health_shares SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?", (write_share.json()["share"]["id"],))
+        assert client.get("/api/shared/health", headers=write_token).status_code == 404
+
+
 def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
     db_path = tmp_path / "api-test.sqlite3"
     monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
@@ -108,14 +268,13 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
         assert food.json()["food"]["food_name"] == "연어 사료"
 
         record = client.post("/api/health/records", headers=headers, json={
-            "record_type": "vaccination", "record_date": "2026-10-23", "title": "종합백신"
+            "record_type": "vaccination", "record_date": "2026-10-23", "title": "종합백신",
+            "details": {"vaccine_type": "dhppl"}
         })
         assert record.status_code == 200
         assert len(client.get("/api/health/records", headers=headers).json()["items"]) == 1
 
-        api_module._activity_model = None
-        api_module._activity_transform = None
-        api_module._runtime_error = None
+        monkeypatch.setattr(api_module.verification, "verifier", _UnavailableVerifier())
         unavailable = client.post("/api/verify/walk", headers=headers,
                       files={"photo": ("walk.jpg", _jpeg_bytes(), "image/jpeg")})
         assert unavailable.status_code == 503
