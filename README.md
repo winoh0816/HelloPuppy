@@ -21,7 +21,7 @@ HelloPuppy/
 └── README.md
 ```
 
-## 프런트엔드 실행
+## 프론트엔드 실행
 
 먼저 아래 백엔드 서버를 실행한 뒤 VS Code Live Server 같은 정적 웹 서버를 `frontend/` 폴더에 실행합니다. `index.html`에서 시작하고 `mypage.html` 또는 `account.html`에서 계정을 생성/로그인합니다. 페이지 및 정적 자산 경로는 `frontend/` 기준 상대 경로입니다.
 
