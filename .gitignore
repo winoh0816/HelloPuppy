@@ -188,3 +188,9 @@ cython_debug/
 .cursorindexingignore
 # 발표자료 (저장소에 올리지 않음)
 presentation/
+
+# Receipt OCR dataset: raw downloads and generated images are rebuilt by backend/tools/build_receipt_dataset.py
+Dataset/receipt/team_photos/
+Dataset/receipt/external_raw/
+Dataset/receipt/ocrReceipt1000/images/
+Dataset/receipt/ocrReceipt1000/cache/

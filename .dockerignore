@@ -1,0 +1,11 @@
+# 이미지에는 backend 코드만 들어간다 (프런트는 nginx 가 볼륨으로 서빙)
+*
+!backend/
+backend/data/
+backend/models/*.pt
+backend/models/clip/
+backend/models/ocr/
+backend/runs/
+**/__pycache__/
+**/*.py[cod]
+backend/tests/

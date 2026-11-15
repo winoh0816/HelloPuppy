@@ -15,7 +15,7 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SOURCE = ROOT / "Dataset" / "MPDD" / "pytorch"
+DEFAULT_SOURCE = ROOT / "Dataset" / "public" / "MPDD" / "pytorch"
 DEFAULT_OUTPUT = ROOT / "Dataset" / "activity"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 

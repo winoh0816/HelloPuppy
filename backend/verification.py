@@ -4,8 +4,12 @@
 1. CLIP 제로샷 장면 분류: 산책·급여·기타 장면을 여러 문장(prompt)으로 비교한다.
 2. COCO 사전학습 YOLO 객체 탐지: 개·사람·그릇 위치를 찾는다. (LVIS·Open Images 등 공개 데이터에
    '목줄' 클래스는 없어서 목줄은 CLIP 문장으로 판단한다.)
-3. 규칙: 개가 실제로 보이는지, 산책은 야외인지, 급여는 그릇이 개 가까이에 있는지 확인한다.
-4. (선택) backend/models/activity_classifier.pt 가 학습돼 있으면 CLIP 점수와 평균한다.
+3. 강아지 주변 확대 판별: 강아지(와 옆의 보호자·그릇) 영역을 잘라 CLIP 점수를 한 번 더 계산한다.
+   사진 전체에서 작게 찍힌 강아지·목줄 신호가 묻히는 문제를 줄인다.
+4. 산책 판정 모델 (backend/models/walk_model.json): 위 점수와 탐지 결과 17개 특징을 로지스틱 회귀로 결합한다.
+   backend/tools/train_walk_model.py 로 학습하며, 파일이 없거나 CLIP 문장이 바뀌면 아래 규칙으로 판단한다.
+5. 규칙: 개가 실제로 보이는지, 산책은 야외·목줄인지, 급여는 그릇이 개 가까이에 있는지 확인한다.
+6. (선택) backend/models/activity_classifier.pt 가 학습돼 있으면 CLIP 점수와 평균한다.
 
 부정 사용 방지(중복 사진·촬영 시각·하루 보상 횟수)는 app.py 에서 이 모듈의 도우미로 처리한다.
 점수는 정확도 보장이 아니며 임계값은 backend/tools/evaluate_verifier.py 결과로 보정한다.
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 from dataclasses import dataclass, field
@@ -26,6 +31,7 @@ from PIL import Image, ImageOps
 
 MODEL_DIR = Path(os.getenv("HELLOPUPPY_MODEL_DIR", Path(__file__).parent / "models"))
 ACTIVITY_MODEL_PATH = MODEL_DIR / "activity_classifier.pt"
+WALK_MODEL_PATH = Path(os.getenv("HELLOPUPPY_WALK_MODEL", MODEL_DIR / "walk_model.json"))
 YOLO_MODEL_PATH = Path(os.getenv("HELLOPUPPY_YOLO_MODEL", MODEL_DIR / "yolo11s.pt"))
 CLIP_CACHE_DIR = MODEL_DIR / "clip"
 CLIP_MODEL = os.getenv("HELLOPUPPY_CLIP_MODEL", "ViT-B-32")
@@ -145,6 +151,8 @@ class Analysis:
     leash: float
     detections: list[Detection] | None  # None when the detector is unavailable
     sources: list[str] = field(default_factory=list)
+    # 강아지 주변을 잘라 다시 계산한 CLIP 점수 (walk/feeding/other/outdoor/leash). 강아지를 못 찾으면 None.
+    subject: dict[str, float] | None = None
 
 
 @dataclass
@@ -169,7 +177,81 @@ def bowl_near_dog(dog: Detection, bowl: Detection) -> bool:
     return overlaps or (ex1 <= cx <= ex2 and ey1 <= cy <= ey2)
 
 
-def decide(activity: str, analysis: Analysis, settings: Settings) -> Decision:
+def subject_box(detections: list[Detection]) -> tuple[float, float, float, float] | None:
+    """Most confident dog joined with people / bowls touching it (where the leash or bowl is), padded by 15%."""
+    dogs = sorted((d for d in detections if d.label == "dog" and d.confidence >= 0.3), key=lambda d: d.confidence, reverse=True)
+    if not dogs:
+        return None
+    x1, y1, x2, y2 = dogs[0].box
+    width, height = x2 - x1, y2 - y1
+    for item in detections:
+        if item.label in ("person", "bowl") and item.confidence >= 0.3:
+            bx1, by1, bx2, by2 = item.box
+            if bx1 < x2 + width and bx2 > x1 - width and by1 < y2 + height and by2 > y1 - height:
+                x1, y1, x2, y2 = min(x1, bx1), min(y1, by1), max(x2, bx2), max(y2, by2)
+    pad_x, pad_y = (x2 - x1) * 0.15, (y2 - y1) * 0.15
+    return max(0.0, x1 - pad_x), max(0.0, y1 - pad_y), min(1.0, x2 + pad_x), min(1.0, y2 + pad_y)
+
+
+WALK_FEATURES = [
+    "walk", "feeding", "other", "outdoor", "leash",
+    "subject_walk", "subject_feeding", "subject_other", "subject_outdoor", "subject_leash", "has_subject",
+    "dog_confidence", "dog_area", "person_present", "person_near_dog", "bowl_present", "bowl_near_dog",
+]
+
+
+def walk_features(analysis: Analysis) -> list[float]:
+    """Feature vector for the walk model. Shared by training and serving so the two never drift apart."""
+    scores, subject = analysis.activity_scores, analysis.subject
+    detections = analysis.detections or []
+    dogs = sorted((d for d in detections if d.label == "dog"), key=lambda d: d.confidence, reverse=True)
+    dog = dogs[0] if dogs else None
+    people = [d for d in detections if d.label == "person" and d.confidence >= 0.3]
+    bowls = [d for d in detections if d.label == "bowl" and d.confidence >= 0.2]
+    area = (dog.box[2] - dog.box[0]) * (dog.box[3] - dog.box[1]) if dog else 0.0
+    keys = ("walk", "feeding", "other", "outdoor", "leash")
+    return [
+        scores["walk"], scores["feeding"], scores["other"], analysis.outdoor, analysis.leash,
+        *([subject[key] for key in keys] if subject else [0.0] * len(keys)), float(subject is not None),
+        dog.confidence if dog else 0.0, area,
+        float(bool(people)), float(dog is not None and any(bowl_near_dog(dog, person) for person in people)),
+        float(bool(bowls)), float(dog is not None and any(bowl_near_dog(dog, bowl) for bowl in bowls)),
+    ]
+
+
+@dataclass(frozen=True)
+class WalkModel:
+    """Standardised logistic regression over WALK_FEATURES (weights in backend/models/walk_model.json)."""
+    mean: list[float]
+    std: list[float]
+    weights: list[float]
+    bias: float
+    threshold: float
+    prompt_version: str
+    info: dict[str, Any] = field(default_factory=dict)
+
+    def score(self, analysis: Analysis) -> float:
+        z = self.bias + sum(w * (x - m) / s for w, x, m, s in zip(self.weights, walk_features(analysis), self.mean, self.std))
+        return 1 / (1 + math.exp(-max(-60.0, min(60.0, z))))
+
+    def to_json(self) -> dict[str, Any]:
+        return {"features": WALK_FEATURES, "mean": self.mean, "std": self.std, "weights": self.weights, "bias": self.bias,
+                "threshold": self.threshold, "prompt_version": self.prompt_version, "info": self.info}
+
+    @classmethod
+    def load(cls, path: Path = WALK_MODEL_PATH) -> "WalkModel | None":
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("features") != WALK_FEATURES:
+            raise ValueError("산책 판정 모델의 특징 목록이 코드와 달라요. train_walk_model.py 로 다시 학습하세요.")
+        if data.get("prompt_version") != PROMPT_VERSION:
+            raise ValueError("CLIP 문장이 바뀌어 산책 판정 모델을 쓰지 않아요. train_walk_model.py 로 다시 학습하세요.")
+        return cls(data["mean"], data["std"], data["weights"], float(data["bias"]), float(data["threshold"]),
+                   data["prompt_version"], data.get("info", {}))
+
+
+def decide(activity: str, analysis: Analysis, settings: Settings, walk_model: WalkModel | None = None) -> Decision:
     """Combine scene scores, detections and rules into a verification decision with readable checks."""
     scores = analysis.activity_scores
     predicted = max(scores, key=scores.get)
@@ -202,7 +284,20 @@ def decide(activity: str, analysis: Analysis, settings: Settings) -> Decision:
           f"{label} 장면 점수 {expected:.0%} (기준 {threshold:.0%}), 다른 장면보다 {margin:+.0%}"
           + ("" if scene_ok else f" · 가장 비슷한 장면: {ACTIVITY_LABELS.get(predicted, '기타')}"))
 
-    if activity == "walk":
+    if activity == "walk" and walk_model is not None and analysis.detections is not None:
+        # 학습된 판정 모델: 장면·확대 장면·목줄·야외·보호자 위치를 함께 보고 하나의 점수로 판단한다.
+        expected = walk_model.score(analysis)
+        scene_ok = expected >= walk_model.threshold
+        checks[-1] = {"key": "scene", "label": "산책 판정", "passed": scene_ok,
+                      "detail": f"산책 판정 점수 {expected:.0%} (기준 {walk_model.threshold:.0%}) · 장면·목줄·야외·보호자 위치를 함께 본 점수"}
+        leash = max(analysis.leash, (analysis.subject or {}).get("leash", 0.0))
+        check("outdoor", "야외 촬영 (참고)", None, f"야외 점수 {analysis.outdoor:.0%}")
+        check("leash", "목줄·가슴줄 (참고)", None,
+              f"목줄 점수 {leash:.0%}" + ("" if scene_ok else " · 강아지와 목줄이 함께 보이게 찍으면 인증이 쉬워져요"))
+        people = [d for d in analysis.detections if d.label == "person" and d.confidence >= 0.3]
+        check("person", "보호자 동행 (참고)", None, f"사람 {len(people)}명 탐지" if people else "사람은 보이지 않아요 (보호자 시점 촬영도 괜찮아요)")
+        verified = dog_ok is not False and scene_ok
+    elif activity == "walk":
         outdoor_ok = analysis.outdoor >= settings.outdoor_threshold
         check("outdoor", "야외 촬영", outdoor_ok, f"야외 점수 {analysis.outdoor:.0%}")
         leash_ok = analysis.leash >= settings.leash_threshold
@@ -249,6 +344,7 @@ class ActivityVerifier:
         self._trained: Any = None
         self._trained_transform: Any = None
         self._trained_classes: list[str] = []
+        self.walk_model: WalkModel | None = None
 
     @property
     def ready(self) -> bool:
@@ -263,6 +359,7 @@ class ActivityVerifier:
             "prompt_version": PROMPT_VERSION,
             "object_detector": YOLO_MODEL_PATH.name if self._yolo is not None else None,
             "trained_classifier": self._trained is not None,
+            "walk_model": WALK_MODEL_PATH.name if self.walk_model is not None else None,
             "message": self.error,
         }
 
@@ -280,6 +377,10 @@ class ActivityVerifier:
                 self._load_yolo()
             except Exception as error:
                 self.error = (self.error + " / " if self.error else "") + f"객체 탐지 모델 로딩 실패: {error}"
+            try:
+                self.walk_model = WalkModel.load()
+            except Exception as error:
+                self.error = (self.error + " / " if self.error else "") + f"산책 판정 모델 로딩 실패: {error}"
             try:
                 self._load_trained()
             except Exception as error:
@@ -334,16 +435,34 @@ class ActivityVerifier:
 
         if self._clip is None:
             raise RuntimeError(self.error or "CLIP 모델이 준비되지 않았습니다.")
+        sources = ["clip"]
+        detections = None
+        if self._yolo is not None:
+            result = self._yolo.predict(source=image, verbose=False, conf=0.15, classes=list(COCO_LABELS))[0]
+            width, height = image.size
+            detections = [
+                Detection(COCO_LABELS[int(box.cls.item())], float(box.conf.item()),
+                          tuple(float(v) for v in (box.xyxy[0][0] / width, box.xyxy[0][1] / height, box.xyxy[0][2] / width, box.xyxy[0][3] / height)))
+                for box in result.boxes
+            ]
+            sources.append("yolo_coco")
+        # 전체 사진과 강아지 주변 확대 사진을 한 번에 CLIP에 넣는다.
+        views = [image]
+        box = subject_box(detections) if detections else None
+        if box is not None:
+            width, height = image.size
+            views.append(image.crop((box[0] * width, box[1] * height, box[2] * width, box[3] * height)))
+            sources.append("subject_crop")
         # 정사각형으로 여백을 채워 가장자리의 목줄·그릇이 잘리지 않게 한다.
-        square = ImageOps.pad(image, (max(image.size),) * 2, color=(0, 0, 0))
+        batch = torch.stack([self._preprocess(ImageOps.pad(view, (max(view.size),) * 2, color=(0, 0, 0))) for view in views])
         with torch.inference_mode():
-            features = self._clip.encode_image(self._preprocess(square).unsqueeze(0))
+            features = self._clip.encode_image(batch)
             features = features / features.norm(dim=-1, keepdim=True)
             scale = self._clip.logit_scale.exp()
 
-            def group_probs(prefix: str) -> dict[str, float]:
+            def group_probs(prefix: str, row: int = 0) -> dict[str, float]:
                 keys = [key for key in self._text_features if key.startswith(prefix)]
-                logits = torch.cat([scale * features @ self._text_features[key].T for key in keys], dim=-1)[0]
+                logits = torch.cat([scale * features[row:row + 1] @ self._text_features[key].T for key in keys], dim=-1)[0]
                 probabilities = logits.softmax(dim=-1)
                 result, offset = {}, 0
                 for key in keys:
@@ -355,29 +474,23 @@ class ActivityVerifier:
             activity = group_probs("activity:")
             outdoor = group_probs("binary:outdoor:")["yes"]
             leash = group_probs("binary:leash:")["yes"]
-            sources = ["clip"]
+            subject = None
+            if box is not None:
+                subject = {**group_probs("activity:", 1), "outdoor": group_probs("binary:outdoor:", 1)["yes"],
+                           "leash": group_probs("binary:leash:", 1)["yes"]}
             if self._trained is not None:
                 logits = self._trained(self._trained_transform(image).unsqueeze(0))[0]
                 trained = {label: float(p) for label, p in zip(self._trained_classes, logits.softmax(dim=0))}
                 weight = Settings.from_env().trained_model_weight
                 activity = {key: (1 - weight) * activity[key] + weight * trained[key] for key in activity}
                 sources.append("trained_classifier")
-
-        detections = None
-        if self._yolo is not None:
-            result = self._yolo.predict(source=image, verbose=False, conf=0.15, classes=list(COCO_LABELS))[0]
-            width, height = image.size
-            detections = [
-                Detection(COCO_LABELS[int(box.cls.item())], float(box.conf.item()),
-                          tuple(float(v) for v in (box.xyxy[0][0] / width, box.xyxy[0][1] / height, box.xyxy[0][2] / width, box.xyxy[0][3] / height)))
-                for box in result.boxes
-            ]
-            sources.append("yolo_coco")
-        return Analysis(activity, outdoor, leash, detections, sources)
+        if self.walk_model is not None:
+            sources.append("walk_model")
+        return Analysis(activity, outdoor, leash, detections, sources, subject)
 
     def verify(self, activity: str, image: Image.Image, settings: Settings | None = None) -> tuple[Decision, Analysis]:
         analysis = self.analyze(image)
-        return decide(activity, analysis, settings or Settings.from_env()), analysis
+        return decide(activity, analysis, settings or Settings.from_env(), self.walk_model), analysis
 
 
 # ---------------------------------------------------------------------------

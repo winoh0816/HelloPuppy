@@ -358,3 +358,28 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
         assert db.execute("SELECT COUNT(*) FROM health_records").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM activity_logs WHERE status='unavailable'").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM activity_logs WHERE status='demo'").fetchone()[0] == 1
+
+
+def test_login_is_locked_after_repeated_failures(tmp_path, monkeypatch):
+    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "login-limit.sqlite3"))
+    monkeypatch.setattr(api_module, "LOGIN_MAX_FAILURES_PER_EMAIL", 3)
+    monkeypatch.setattr(api_module, "LOGIN_MAX_FAILURES_PER_IP", 5)
+    good = {"email": "owner@example.test", "password": "correct horse battery staple"}
+    with TestClient(app) as client:
+        _register(client, good["email"])
+        wrong = {**good, "password": "wrong password"}
+        assert [client.post("/api/auth/login", json=wrong).status_code for _ in range(3)] == [401, 401, 401]
+        # 4번째부터는 맞는 비밀번호여도 잠겨 있다
+        locked = client.post("/api/auth/login", json=good)
+        assert locked.status_code == 429 and int(locked.headers["Retry-After"]) > 0
+
+        # 다른 계정은 영향 없음, 성공하면 그 계정의 실패 횟수는 초기화
+        _register(client, "other@example.test")
+        other = {"email": "other@example.test", "password": "correct horse battery staple"}
+        assert client.post("/api/auth/login", json={**other, "password": "nope"}).status_code == 401
+        assert client.post("/api/auth/login", json=other).status_code == 200
+
+        # 같은 IP 에서 이메일을 바꿔 가며 시도해도 IP 한도(5)에서 막힌다. 없는 이메일도 실패로 센다.
+        # 지금까지 IP 실패 4회 -> 없는 이메일로 5번째 실패, 그다음은 어떤 이메일이든 잠김
+        assert client.post("/api/auth/login", json={"email": "ghost@example.test", "password": "x"}).status_code == 401
+        assert client.post("/api/auth/login", json={"email": "ghost2@example.test", "password": "x"}).status_code == 429

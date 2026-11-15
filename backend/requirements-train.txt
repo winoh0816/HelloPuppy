@@ -1,0 +1,4 @@
+# backend/train_activity.py (MobileNetV3 활동 분류기 학습). GPU 가 있으면 PyTorch 공식 안내의 CUDA 빌드를 먼저 설치하세요.
+-r requirements.txt
+torch>=2.2
+torchvision>=0.17

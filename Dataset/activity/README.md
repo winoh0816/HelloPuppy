@@ -4,7 +4,7 @@
 
 ## MPDD 사용 안내
 
-`Dataset/MPDD/pytorch`는 `train`, `val`, `query`, `gallery` 이미지 폴더로 구성되어 있습니다. 확인한 이미지 파일명에는 숫자 identity와 카메라/시퀀스 유사 토큰이 있지만 별도의 keypoint/pose annotation이나 walk-action label 파일은 없습니다. 따라서 MPDD는 정식 pose/keypoint 정답 데이터로 볼 수 없습니다. 프로젝트 요청에 따라 `train`+`val` 이미지 1,032장을 **약한 walk 후보**로 준비했으며, 실제 산책 장면인지 사람이 검수한 뒤에만 학습 정답으로 취급하세요.
+`Dataset/public/MPDD/pytorch`는 `train`, `val`, `query`, `gallery` 이미지 폴더로 구성되어 있습니다. 확인한 이미지 파일명에는 숫자 identity와 카메라/시퀀스 유사 토큰이 있지만 별도의 keypoint/pose annotation이나 walk-action label 파일은 없습니다. 따라서 MPDD는 정식 pose/keypoint 정답 데이터로 볼 수 없습니다. 프로젝트 요청에 따라 `train`+`val` 이미지 1,032장을 **약한 walk 후보**로 준비했으며, 실제 산책 장면인지 사람이 검수한 뒤에만 학습 정답으로 취급하세요.
 
 `backend/tools/prepare_mpdd_walk.py`는 같은 identity가 학습과 검증에 동시에 들어가지 않도록 기존 train/val을 합쳐 identity 단위로 다시 나눕니다. 현재 생성 결과는 학습 819장(76 identities), 검증 213장(19 identities)입니다. 출처와 약한 라벨임은 `mpdd_walk_manifest.csv`에 남깁니다. 이 검증 분리는 개 identity 누수를 줄일 뿐 실제 walk-action 정답 라벨을 보증하지 않습니다.
 
