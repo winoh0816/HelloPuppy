@@ -175,21 +175,23 @@ function startCameraAuth() {
 }
 
 function startOCR() {
-    const receiptImage = document.getElementById("receipt-img");
-    if (receiptImage) receiptImage.style.filter = "brightness(0.5)";
-    showLoading("영수증을 분석하는 중입니다...", {
-        message: "OCR 기능은 아직 데모 상태입니다.<br>실제 영수증 검증 전에는 포인트가 적립되지 않습니다.",
-        action: () => { if (receiptImage) receiptImage.style.filter = "none"; }
-    });
+    return verifyActivityPhoto("receipt", "receipt-photo", "receipt-photo-status", "/api/receipts", "영수증 글자를 읽고 있습니다...");
 }
 
 function previewFeedingPhoto(event) { previewVerificationPhoto(event, "feeding"); }
 
+const PHOTO_PREVIEW_IDS = {
+    walk: ["walk-photo-status", "walk-preview"],
+    feeding: ["feeding-photo-status", "feeding-img"],
+    receipt: ["receipt-photo-status", "receipt-img"],
+};
+
 function previewVerificationPhoto(event, activity) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const status = document.getElementById(activity === "walk" ? "walk-photo-status" : "feeding-photo-status");
-    const preview = document.getElementById(activity === "walk" ? "walk-preview" : "feeding-img");
+    const [statusId, previewId] = PHOTO_PREVIEW_IDS[activity];
+    const status = document.getElementById(statusId);
+    const preview = document.getElementById(previewId);
     if (!file.type.startsWith("image/")) {
         if (status) status.textContent = "이미지 파일을 선택해 주세요.";
         event.target.value = "";
@@ -205,7 +207,24 @@ function previewVerificationPhoto(event, activity) {
         preview.dataset.objectUrl = URL.createObjectURL(file);
         preview.src = preview.dataset.objectUrl;
     }
-    if (status) status.textContent = "사진이 선택되었습니다. AI 검증을 진행해 주세요.";
+    if (status) status.textContent = activity === "receipt"
+        ? "영수증 사진이 선택되었습니다. 텍스트 추출을 눌러 주세요."
+        : "사진이 선택되었습니다. AI 검증을 진행해 주세요.";
+}
+
+// 영수증 OCR 결과: 추출한 항목과 읽은 원문
+function renderReceiptDetails(result) {
+    const fields = result.fields || {};
+    const won = (value) => value == null ? "" : `${Number(value).toLocaleString("ko-KR")}원`;
+    const rows = [
+        ["매장", fields.store_name], ["사업자번호", fields.business_number],
+        ["거래일시", [fields.purchased_date, fields.purchased_time].filter(Boolean).join(" ")],
+        ["결제 금액", won(fields.total_amount)], ["승인번호", fields.approval_number],
+        ["반려동물 품목", (fields.items || []).join(", ")],
+    ].map(([label, value]) => `<div><dt>${label}</dt><dd>${value ? escapeShopText(String(value)) : '<span class="muted">인식 못 함</span>'}</dd></div>`).join("");
+    const lines = (result.lines || []).map((line) => escapeShopText(line)).join("\n");
+    return `<dl class="receipt-fields">${rows}</dl>
+        <details class="receipt-raw"><summary>읽은 글자 전체 보기 (${(result.lines || []).length}줄 · ${result.ocr?.seconds ?? "-"}초)</summary><pre>${lines || "읽은 글자가 없어요."}</pre></details>`;
 }
 
 // 서버가 돌려준 판정 근거(checks)를 통과/실패/참고로 나눠 보여준다.
@@ -221,10 +240,10 @@ function renderVerificationResult(activity, result) {
     container.className = `verify-result ${result.verified ? "is-verified" : "is-rejected"}`;
     container.innerHTML = `<div class="verify-result-head"><strong>${result.verified ? "인증 성공" : "인증 실패"}</strong>
         <span>${result.points_awarded ? `+${result.points_awarded}P` : "0P"}</span></div>
-        <p>${escapeShopText(result.message || "")}</p>${checks ? `<ul>${checks}</ul>` : ""}`;
+        <p>${escapeShopText(result.message || "")}</p>${checks ? `<ul>${checks}</ul>` : ""}${result.fields ? renderReceiptDetails(result) : ""}`;
 }
 
-async function verifyActivityPhoto(activity, inputId, statusId) {
+async function verifyActivityPhoto(activity, inputId, statusId, endpoint = `/api/verify/${activity}`, loadingText = "백엔드 AI가 사진을 판별하고 있습니다...") {
     const input = document.getElementById(inputId);
     const status = document.getElementById(statusId);
     const resultBox = document.getElementById(`${activity}-result`);
@@ -237,14 +256,14 @@ async function verifyActivityPhoto(activity, inputId, statusId) {
     const spinner = document.getElementById("loading-spinner");
     const scanLine = document.querySelector(".scan-line");
     if (modal && message && spinner) {
-        message.textContent = "백엔드 AI가 사진을 판별하고 있습니다...";
+        message.textContent = loadingText;
         spinner.style.display = "block"; modal.style.display = "flex";
     }
     if (scanLine) scanLine.style.display = "block";
     try {
         const form = new FormData(); form.append("photo", file, file.name);
         const token = window.HelloPuppyAPI.token();
-        const response = await fetch(`${VERIFICATION_API_BASE}/api/verify/${activity}`, {
+        const response = await fetch(`${VERIFICATION_API_BASE}${endpoint}`, {
             method: "POST", body: form, headers: { Authorization: `Bearer ${token}` }
         });
         const result = await response.json().catch(() => ({}));

@@ -13,10 +13,16 @@ HelloPuppy/
 │   ├── health.html            # 보호자 건강기록(PHR)·병원 공유·FHIR 내보내기
 │   ├── vet-share.html         # 동물병원용 공유 기록 열람·진료기록 입력 (로그인 없음)
 │   └── assets/                # CSS, JavaScript, 이미지
-├── backend/                  # FastAPI 사진 판별 API와 모델 학습 코드
-├── Dataset/                  # 제공 데이터셋 및 직접 준비할 활동 사진
+├── backend/                  # FastAPI 사진 판별 API와 모델 학습 코드 (Dockerfile 포함)
+├── Dataset/                  # 데이터셋 (구성은 Dataset/README.md)
+│   ├── public/                #   외부 공개 데이터셋 원본
+│   ├── activity/              #   산책·급여 인증 학습 사진
+│   ├── activity_eval/         #   산책·급여 인증 평가 세트
+│   └── receipt/               #   영수증 OCR 사진·1,000장 평가 데이터셋
 ├── design/                   # 앱 원본 로고·화면 기획 이미지
+├── deploy/                   # nginx 설정 (docker-compose.yml 에서 사용)
 ├── docs/archive/             # 이전 중복 프로젝트 메타데이터 보관
+├── docker-compose.yml        # api + web(nginx) 배포
 ├── LICENSE
 └── README.md
 ```
@@ -42,6 +48,8 @@ HelloPuppy/
 ## 백엔드 실행
 
 Python 환경 구성, SQLite 데이터 저장, 계정 API, 활동 분류 학습 및 백엔드 실행 방법은 [backend/README.md](backend/README.md)를 참고하세요. 백엔드 명령은 저장소 루트에서 실행합니다. 기본 DB는 `backend/data/hellopuppy.sqlite3`에 생성됩니다.
+
+Docker가 있으면 프런트와 API를 한 번에 띄울 수 있습니다: `docker compose up -d --build` → http://localhost:8080 (자세한 내용은 [backend/README.md](backend/README.md#docker-배포)).
 
 ## 프로젝트 정보
 

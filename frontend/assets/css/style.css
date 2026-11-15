@@ -3119,3 +3119,81 @@ p {
         border-radius: 0 0 28px 28px;
     }
 }
+
+/* 영수증 리워드: 촬영 미리보기와 OCR 추출 결과 */
+.receipt-scanner {
+    display: grid;
+    place-items: center;
+    background: #f3eee6;
+}
+
+.receipt-scanner img {
+    position: absolute;
+    inset: 0;
+    object-fit: contain;
+    background: #f3eee6;
+}
+
+.receipt-scanner img[hidden] {
+    display: none;
+}
+
+.receipt-placeholder {
+    display: grid;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 40px;
+    text-align: center;
+}
+
+.receipt-placeholder span {
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.receipt-fields {
+    display: grid;
+    gap: 6px;
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.8);
+}
+
+.receipt-fields div {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    gap: 8px;
+}
+
+.receipt-fields dt {
+    color: var(--muted);
+}
+
+.receipt-fields dd {
+    margin: 0;
+    font-weight: 700;
+    word-break: break-all;
+}
+
+.receipt-raw {
+    margin-top: 10px;
+}
+
+.receipt-raw summary {
+    cursor: pointer;
+    color: var(--muted);
+}
+
+.receipt-raw pre {
+    max-height: 240px;
+    overflow: auto;
+    margin: 8px 0 0;
+    padding: 10px;
+    border-radius: 10px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}

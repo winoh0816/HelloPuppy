@@ -2,6 +2,7 @@
 
 - CLIP (open_clip, 기본 ViT-B-32 / laion2b_s34b_b79k, 약 600MB) -> backend/models/clip/
 - COCO 사전학습 YOLO (기본 yolo11s.pt, 약 19MB) -> backend/models/yolo11s.pt
+- 영수증 OCR RapidOCR PP-OCRv5 검출 + 한국어 인식 모델 (약 20MB) -> backend/models/ocr/
 
 Run from the repository root:
     .venv-backend\\Scripts\\python.exe -m backend.tools.download_verification_models
@@ -14,6 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from backend.receipt import OCR_MODEL_DIR, reader
 from backend.verification import CLIP_CACHE_DIR, CLIP_MODEL, CLIP_PRETRAINED, YOLO_MODEL_PATH, verifier
 
 
@@ -33,9 +35,12 @@ def main() -> None:
             YOLO_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(downloaded, YOLO_MODEL_PATH)
 
+    print(f"영수증 OCR (RapidOCR PP-OCRv5 한국어) 내려받는 중 -> {OCR_MODEL_DIR}")
+    ocr_ready = reader.ready
+
     status = verifier.status()
-    print("상태:", status)
-    if not status["ready"] or not status["object_detector"]:
+    print("상태:", status, "| OCR:", "준비됨" if ocr_ready else reader.error)
+    if not status["ready"] or not status["object_detector"] or not ocr_ready:
         sys.exit(1)
 
 

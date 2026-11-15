@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 저장소의 Dataset/(약 1GB)은 테스트에 필요 없어 받지 않는다.
+          sparse-checkout: |
+            backend
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      # AI 모델(torch·CLIP·YOLO·OCR) 없이 도는 API·파서 테스트. 모델이 필요한 부분은 테스트에서 가짜로 바꾼다.
+      - run: pip install -r backend/requirements-dev.txt
+      - run: python -m pytest -q backend/tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            frontend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # 빌드 단계가 없는 정적 페이지라 JS 문법 오류만 잡는다.
+      - run: for f in frontend/assets/js/*.js; do node --check "$f" || exit 1; done

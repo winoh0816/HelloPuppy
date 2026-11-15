@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import io
+import json
 import random
 from datetime import datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -42,6 +44,50 @@ def test_feeding_requires_bowl_near_dog_unless_scene_is_very_strong():
     assert decide("feeding", _analysis(feeding=0.85, detections=[DOG]), SETTINGS).verified
     # 그릇만 있고 개가 없으면 실패
     assert not decide("feeding", _analysis(feeding=0.85, detections=[near_bowl]), SETTINGS).verified
+
+
+def _walk_only_model(threshold=0.5):
+    """A walk model that only looks at the full-image walk score: probability = sigmoid(10 * (walk - 0.5))."""
+    count = len(verification.WALK_FEATURES)
+    weights = [10.0 if name == "walk" else 0.0 for name in verification.WALK_FEATURES]
+    mean = [0.5 if name == "walk" else 0.0 for name in verification.WALK_FEATURES]
+    return verification.WalkModel(mean, [1.0] * count, weights, 0.0, threshold, verification.PROMPT_VERSION)
+
+
+def test_subject_box_joins_people_and_bowls_touching_the_dog():
+    near_person = Detection("person", 0.8, (0.55, 0.10, 0.80, 0.90))
+    far_person = Detection("person", 0.8, (0.95, 0.00, 1.00, 0.10))
+    x1, y1, x2, y2 = verification.subject_box([DOG, near_person, far_person])
+    assert x1 < 0.30 and x2 > 0.80 and y1 < 0.10 and y2 > 0.90
+    assert verification.subject_box([DOG, far_person])[2] < 0.70
+    assert verification.subject_box([near_person]) is None
+
+
+def test_walk_model_decides_walk_and_falls_back_to_rules_without_detector():
+    model = _walk_only_model()
+    passed = decide("walk", _analysis(walk=0.8, leash=0.0, outdoor=0.1), SETTINGS, model)
+    assert passed.verified  # 목줄·야외는 모델 안에서만 반영되고 단독으로 탈락시키지 않는다
+    assert {c["key"] for c in passed.checks} >= {"dog", "scene", "outdoor", "leash", "person"}
+    assert not decide("walk", _analysis(walk=0.3), SETTINGS, model).verified
+    assert not decide("walk", _analysis(walk=0.8, detections=[]), SETTINGS, model).verified
+    # 탐지 결과가 없으면 특징을 만들 수 없어 기존 규칙으로 판단한다.
+    assert not decide("walk", _analysis(walk=0.8, leash=0.0, detections=None), SETTINGS, model).verified
+    # 급여는 모델과 상관없이 규칙으로 판단한다.
+    assert not decide("feeding", _analysis(feeding=0.6), SETTINGS, model).verified
+
+
+def test_walk_model_file_round_trip_and_prompt_check(tmp_path):
+    path = tmp_path / "walk_model.json"
+    path.write_text(json.dumps(_walk_only_model(0.7).to_json()), encoding="utf-8")
+    assert verification.WalkModel.load(path).threshold == 0.7
+    stale = {**_walk_only_model().to_json(), "prompt_version": "old"}
+    path.write_text(json.dumps(stale), encoding="utf-8")
+    with pytest.raises(ValueError):
+        verification.WalkModel.load(path)
+    assert verification.WalkModel.load(tmp_path / "missing.json") is None
+    # 저장소에 포함된 모델은 현재 CLIP 문장과 특징 목록에 맞아야 한다.
+    if verification.WALK_MODEL_PATH.is_file():
+        assert verification.WalkModel.load() is not None
 
 
 def _noise_jpeg(seed: int, exif_time: datetime | None = None) -> bytes:

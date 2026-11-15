@@ -14,13 +14,13 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import verification
+from . import receipt, storage, verification
 from .database import db_connection, init_db, transaction
 from .health import (
     LIVING_ENVIRONMENTS, PROGRESSIONS, REGISTRATION_TYPES, SHARE_SCOPES, SPECIES,
@@ -41,11 +41,20 @@ DAILY_REWARD_LIMITS = {
     "feeding": int(os.getenv("HELLOPUPPY_FEEDING_DAILY_LIMIT", "3")),
 }
 MAX_PHOTO_AGE_HOURS = int(os.getenv("HELLOPUPPY_MAX_PHOTO_AGE_HOURS", "24"))
+RECEIPT_POINTS = int(os.getenv("HELLOPUPPY_RECEIPT_POINTS", "30"))
+RECEIPT_DAILY_LIMIT = int(os.getenv("HELLOPUPPY_RECEIPT_DAILY_LIMIT", "1"))
+RECEIPT_MAX_AGE_DAYS = int(os.getenv("HELLOPUPPY_RECEIPT_MAX_AGE_DAYS", "7"))
 DUPLICATE_HASH_DISTANCE = 6
 STARTING_POINTS = int(os.getenv("HELLOPUPPY_STARTING_POINTS", "0"))
 TOKEN_TTL_DAYS = int(os.getenv("HELLOPUPPY_TOKEN_TTL_DAYS", "30"))
 PBKDF2_ITERATIONS = 310_000
 MAX_SHARE_HOURS = 72
+# 로그인 시도 제한: 창(분) 안에 이메일별·IP별 실패가 한도에 닿으면 429 로 막는다.
+LOGIN_WINDOW_MINUTES = int(os.getenv("HELLOPUPPY_LOGIN_WINDOW_MINUTES", "15"))
+LOGIN_MAX_FAILURES_PER_EMAIL = int(os.getenv("HELLOPUPPY_LOGIN_MAX_FAILURES_PER_EMAIL", "5"))
+LOGIN_MAX_FAILURES_PER_IP = int(os.getenv("HELLOPUPPY_LOGIN_MAX_FAILURES_PER_IP", "20"))
+# 리버스 프록시(nginx 등) 뒤에서만 켠다. 켜면 X-Forwarded-For 첫 주소를 클라이언트 IP 로 본다.
+TRUST_PROXY = os.getenv("HELLOPUPPY_TRUST_PROXY", "").strip().lower() in {"1", "true", "yes", "on"}
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -246,11 +255,25 @@ def _decode_image(data: bytes, max_bytes: int = MAX_UPLOAD_BYTES) -> tuple[Image
 
 
 def _store_image(db: sqlite3.Connection, user_id: int, purpose: str, filename: str, mime: str, data: bytes, perceptual_hash: str = "") -> int:
+    """Save the photo without its EXIF/GPS metadata as a file (storage.py) and record it in images."""
+    storage_path = storage.save_image(data, mime)
     cursor = db.execute(
-        "INSERT INTO images(user_id,purpose,mime_type,original_name,image_data,perceptual_hash) VALUES(?,?,?,?,?,?)",
-        (user_id, purpose, mime, Path(filename).name[:255], data, perceptual_hash)
+        "INSERT INTO images(user_id,purpose,mime_type,original_name,image_data,storage_path,perceptual_hash) VALUES(?,?,?,?,X'',?,?)",
+        (user_id, purpose, mime, Path(filename).name[:255], storage_path, perceptual_hash)
     )
     return int(cursor.lastrowid)
+
+
+def _image_response(row: sqlite3.Row | None, cache_control: str = "private, no-store") -> Any:
+    from fastapi.responses import Response
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
+    try:
+        content = storage.read_image(row["storage_path"]) if row["storage_path"] else bytes(row["image_data"])
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="사진 파일을 찾을 수 없습니다.") from error
+    return Response(content=content, media_type=row["mime_type"], headers={"Cache-Control": cache_control})
 
 
 def _award_points(db: sqlite3.Connection, user_id: int, delta: int, reason: str, reference: str) -> int:
@@ -281,6 +304,7 @@ def health() -> dict[str, Any]:
         "database": "sqlite",
         "database_path": str(Path(os.getenv("HELLOPUPPY_DB_PATH", Path(__file__).parent / "data" / "hellopuppy.sqlite3")).resolve()),
         **status,
+        **receipt.reader.status(),
         "activity_model": status["trained_classifier"],
         "dog_detector": status["object_detector"] is not None,
     }
@@ -316,17 +340,45 @@ def register(request: RegisterRequest) -> dict[str, Any]:
     return {"access_token": access_token, "token_type": "bearer", "user": dict(user), "points": STARTING_POINTS}
 
 
-@app.post("/api/auth/login")
-def login(request: LoginRequest) -> dict[str, Any]:
+def _client_ip(http: Request) -> str:
+    if TRUST_PROXY and (forwarded := http.headers.get("x-forwarded-for")):
+        return forwarded.split(",")[0].strip()
+    return http.client.host if http.client else "unknown"
+
+
+def _login_blocked(keys: list[tuple[str, int]]) -> int | None:
+    """Seconds until the oldest counted failure expires, if any key reached its limit within the window."""
+    window_start = (utc_now() - timedelta(minutes=LOGIN_WINDOW_MINUTES)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     with db_connection() as db:
-        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (request.email.lower(),)).fetchone()
-    if user is None:
-        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다.")
-    _, supplied = hash_password(request.password, bytes(user["password_salt"]))
-    if not hmac.compare_digest(supplied, bytes(user["password_hash"])):
+        for key, limit in keys:
+            rows = db.execute("SELECT created_at FROM login_failures WHERE key=? AND created_at>? ORDER BY created_at DESC LIMIT ?",
+                              (key, window_start, limit)).fetchall()
+            if len(rows) >= limit:
+                oldest = datetime.fromisoformat(rows[-1]["created_at"].replace("Z", "+00:00"))
+                return max(1, int((oldest + timedelta(minutes=LOGIN_WINDOW_MINUTES) - utc_now()).total_seconds()) + 1)
+    return None
+
+
+@app.post("/api/auth/login")
+def login(request: LoginRequest, http: Request) -> dict[str, Any]:
+    email = request.email.lower()
+    keys = [(f"email:{email}", LOGIN_MAX_FAILURES_PER_EMAIL), (f"ip:{_client_ip(http)}", LOGIN_MAX_FAILURES_PER_IP)]
+    if retry_after := _login_blocked(keys):
+        raise HTTPException(status_code=429, headers={"Retry-After": str(retry_after)},
+                            detail=f"로그인 시도가 너무 많아요. {max(1, round(retry_after / 60))}분 뒤에 다시 시도해 주세요.")
+    with db_connection() as db:
+        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+    # 없는 이메일도 같은 비용으로 계산하고 실패로 센다 (가입 여부를 응답 시간·잠금으로 알 수 없도록).
+    salt, expected = (bytes(user["password_salt"]), bytes(user["password_hash"])) if user else (bytes(16), b"")
+    _, supplied = hash_password(request.password, salt)
+    if user is None or not hmac.compare_digest(supplied, expected):
+        with transaction() as db:
+            db.executemany("INSERT INTO login_failures(key) VALUES(?)", [(key,) for key, _ in keys])
+            db.execute("DELETE FROM login_failures WHERE created_at<?", ((utc_now() - timedelta(days=1)).isoformat(timespec="milliseconds").replace("+00:00", "Z"),))
         raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다.")
     public_user = {key: user[key] for key in ("id", "email", "display_name", "created_at")}
     with transaction() as db:
+        db.execute("DELETE FROM login_failures WHERE key=?", (keys[0][0],))  # 성공하면 이 계정의 실패 횟수는 초기화
         access_token = create_session(db, int(user["id"]))
         db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "login", "user", user["id"]))
     return {"access_token": access_token, "token_type": "bearer", "user": public_user}
@@ -703,17 +755,13 @@ def create_shared_health_record(request: ClinicRecordRequest, share: dict[str, A
 
 @app.get("/api/shared/health/images/{image_id}")
 def get_shared_health_image(image_id: int, share: dict[str, Any] = Depends(get_health_share)) -> Any:
-    from fastapi.responses import Response
-
     with db_connection() as db:
-        row = db.execute("""SELECT i.mime_type,i.image_data FROM images i
+        row = db.execute("""SELECT i.mime_type,i.image_data,i.storage_path FROM images i
             WHERE i.id=? AND i.user_id=? AND i.purpose='health' AND (
                 EXISTS(SELECT 1 FROM health_records r WHERE r.image_id=i.id AND r.user_id=i.user_id)
                 OR EXISTS(SELECT 1 FROM pre_visit_questionnaires q WHERE q.image_id=i.id AND q.user_id=i.user_id))""",
                          (image_id, share["user_id"])).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
-    return Response(content=bytes(row["image_data"]), media_type=row["mime_type"], headers={"Cache-Control": "private, no-store"})
+    return _image_response(row)
 
 
 @app.post("/api/uploads")
@@ -733,14 +781,11 @@ async def upload_image(purpose: str, photo: UploadFile = File(...), user: dict[s
 
 @app.get("/api/images/{image_id}")
 def get_image(image_id: int, user: dict[str, Any] = Depends(get_current_user)) -> Any:
-    from fastapi.responses import Response
     with db_connection() as db:
-        row = db.execute("""SELECT i.mime_type,i.image_data FROM images i
+        row = db.execute("""SELECT i.mime_type,i.image_data,i.storage_path FROM images i
             WHERE i.id=? AND (i.user_id=? OR EXISTS(SELECT 1 FROM community_posts p WHERE p.image_id=i.id))""",
                          (image_id, user["id"])).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
-    return Response(content=bytes(row["image_data"]), media_type=row["mime_type"], headers={"Cache-Control": "private, no-store"})
+    return _image_response(row)
 
 
 @app.get("/api/community/posts")
@@ -770,16 +815,15 @@ def list_public_walk_map_posts(limit: int = 100) -> dict[str, Any]:
 @app.get("/api/community/walk-map/images/{image_id}")
 def get_public_walk_map_image(image_id: int) -> Any:
     """Serve an image only when it is attached to an explicitly public map post."""
-    from fastapi.responses import Response
 
     with db_connection() as db:
-        row = db.execute("""SELECT i.mime_type,i.image_data FROM images i
+        row = db.execute("""SELECT i.mime_type,i.image_data,i.storage_path FROM images i
             JOIN community_posts p ON p.image_id=i.id
             WHERE i.id=? AND i.purpose='community' AND p.location_name<>''
                 AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL""", (image_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="공개 지도 게시물의 사진을 찾을 수 없습니다.")
-    return Response(content=bytes(row["image_data"]), media_type=row["mime_type"], headers={"Cache-Control": "public, max-age=300"})
+    return _image_response(row, "public, max-age=300")
 
 
 @app.get("/api/community/posts/{post_id}/recommendation")
@@ -935,6 +979,7 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
         "scores": analysis.activity_scores if analysis else None,
         "outdoor": analysis.outdoor if analysis else None,
         "leash": analysis.leash if analysis else None,
+        "subject": analysis.subject if analysis else None,
         "detections": [d.to_dict() for d in analysis.detections] if analysis and analysis.detections is not None else None,
         "sources": analysis.sources if analysis else [],
         "photo_taken_at": taken_at.isoformat() if taken_at else None,
@@ -968,6 +1013,88 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
         "scores": {key: round(value, 4) for key, value in analysis.activity_scores.items()} if analysis else {},
         "checks": checks, "points_awarded": points_awarded, "balance": balance, "message": message,
     }
+
+
+def _receipt_checks(fields: receipt.ReceiptFields, line_count: int, duplicate_receipt: bool, duplicate_photo: bool) -> list[dict[str, Any]]:
+    today = datetime.now().date()
+    purchased = date.fromisoformat(fields.purchased_date) if fields.purchased_date else None
+    age_days = (today - purchased).days if purchased else None
+    recent = age_days is not None and -1 <= age_days <= RECEIPT_MAX_AGE_DAYS
+    return [
+        {"key": "text", "label": "영수증 글자 인식", "passed": line_count >= 3, "detail": f"{line_count}줄을 읽었어요." if line_count else "글자를 읽지 못했어요. 영수증 전체가 밝게 보이게 찍어 주세요."},
+        {"key": "pet", "label": "반려동물 관련 구매", "passed": bool(fields.pet_keywords),
+         "detail": f"확인한 단어: {', '.join(fields.pet_keywords[:6])}" if fields.pet_keywords else "펫샵·사료·간식 등 반려동물 관련 내용을 찾지 못했어요."},
+        {"key": "total", "label": "결제 금액", "passed": fields.total_amount is not None,
+         "detail": f"{fields.total_amount:,}원" if fields.total_amount else "합계·결제 금액을 찾지 못했어요."},
+        {"key": "date", "label": f"최근 {RECEIPT_MAX_AGE_DAYS}일 이내 구매", "passed": recent,
+         "detail": "거래 날짜를 찾지 못했어요." if purchased is None else f"거래일 {purchased.isoformat()}" + ("" if recent else " · 기간이 지났거나 날짜가 올바르지 않아요.")},
+        {"key": "duplicate", "label": "처음 제출한 영수증", "passed": not (duplicate_receipt or duplicate_photo),
+         "detail": "이미 리워드를 받은 영수증이에요." if duplicate_receipt else ("이미 제출한 사진이에요." if duplicate_photo else "처음 제출한 영수증이에요.")},
+    ]
+
+
+@app.post("/api/receipts")
+async def scan_receipt(photo: UploadFile = File(...), user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """OCR a pet-shop receipt, extract its fields and award points once per receipt."""
+    data = await photo.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="사진은 12MB 이하로 올려 주세요.")
+    image, mime = _decode_image(data)
+    if not await run_in_threadpool(lambda: receipt.reader.ready):
+        raise HTTPException(status_code=503, detail=receipt.reader.error or "OCR 엔진을 사용할 수 없습니다.")
+    user_id = int(user["id"])
+    lines, meta = await run_in_threadpool(receipt.reader.read, image)
+    fields = receipt.parse_receipt([line.text for line in lines])
+    fingerprint = fields.fingerprint()
+    photo_hash = verification.difference_hash(image)
+
+    with db_connection() as db:
+        duplicate_receipt = fingerprint is not None and db.execute(
+            "SELECT 1 FROM receipts WHERE fingerprint=? AND status='verified'", (fingerprint,)).fetchone() is not None
+        used_hashes = [row["perceptual_hash"] for row in db.execute("""SELECT i.perceptual_hash FROM receipts r JOIN images i ON i.id=r.image_id
+            WHERE r.user_id=? AND r.status='verified' AND i.perceptual_hash<>''""", (user_id,)).fetchall()]
+    duplicate_photo = any(verification.hamming_distance(photo_hash, used) <= DUPLICATE_HASH_DISTANCE for used in used_hashes)
+    checks = _receipt_checks(fields, len(lines), duplicate_receipt, duplicate_photo)
+    verified = all(check["passed"] for check in checks)
+
+    local_midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = local_midnight.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    points_awarded = 0
+    with transaction() as db:
+        image_id = _store_image(db, user_id, "receipt", photo.filename or "receipt", mime, data, photo_hash)
+        rewarded_today = db.execute("""SELECT COUNT(*) AS count FROM points_ledger WHERE user_id=? AND reason='영수증 리워드' AND delta>0 AND created_at>=?""",
+                                    (user_id, day_start)).fetchone()["count"]
+        cursor = db.execute("""INSERT INTO receipts(user_id,image_id,status,store_name,business_number,purchased_date,purchased_time,
+            total_amount,approval_number,fingerprint,raw_text,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (user_id, image_id, "verified" if verified else "rejected", fields.store_name or "", fields.business_number or "",
+             fields.purchased_date, fields.purchased_time, fields.total_amount, fields.approval_number or "", fingerprint,
+             "\n".join(line.text for line in lines),
+             json.dumps({"checks": checks, "fields": fields.to_dict(), "lines": [line.to_dict() for line in lines], **meta}, ensure_ascii=False)))
+        if verified and rewarded_today < RECEIPT_DAILY_LIMIT:
+            points_awarded = RECEIPT_POINTS
+            balance = _award_points(db, user_id, points_awarded, "영수증 리워드", f"receipt:{cursor.lastrowid}")
+        else:
+            row = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user_id,)).fetchone()
+            balance = int(row["balance"]) if row else 0
+
+    if verified and points_awarded:
+        message = f"영수증 인증에 성공해 {points_awarded}P를 받았어요."
+    elif verified:
+        message = f"영수증은 확인했지만 오늘 영수증 리워드는 {RECEIPT_DAILY_LIMIT}회 모두 받았어요."
+    else:
+        message = "영수증을 확인하지 못했어요. 확인 필요: " + ", ".join(check["label"] for check in checks if not check["passed"])
+    return {
+        "id": cursor.lastrowid, "verified": verified, "points_awarded": points_awarded, "balance": balance, "message": message,
+        "checks": checks, "fields": fields.to_dict(), "lines": [line.text for line in lines], "ocr": meta,
+    }
+
+
+@app.get("/api/receipts")
+def list_receipts(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with db_connection() as db:
+        rows = db.execute("""SELECT id,status,store_name,purchased_date,total_amount,created_at FROM receipts
+            WHERE user_id=? ORDER BY id DESC LIMIT 20""", (user["id"],)).fetchall()
+    return {"items": [dict(row) for row in rows]}
 
 
 @app.get("/api/activity/logs")

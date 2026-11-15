@@ -11,7 +11,7 @@ import yaml
 from ultralytics import YOLO
 
 ROOT = Path(__file__).resolve().parents[1]
-DATASET = ROOT / "Dataset" / "Dog Breeds.v3i.yolov8"
+DATASET = ROOT / "Dataset" / "public" / "DogBreeds-yolov8"
 OUTPUT = Path(__file__).parent / "models" / "dog_detector.pt"
 
 

@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from . import storage
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = Path(__file__).parent / "data" / "hellopuppy.sqlite3"
 
@@ -71,6 +73,14 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
+            -- 로그인 실패 기록 (이메일·IP별 시도 제한). 하루 지난 기록은 로그인 때 지운다.
+            CREATE TABLE IF NOT EXISTS login_failures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_failures_key ON login_failures(key, created_at);
+
             CREATE TABLE IF NOT EXISTS pets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -103,7 +113,7 @@ def init_db() -> None:
                 purpose TEXT NOT NULL,
                 mime_type TEXT NOT NULL,
                 original_name TEXT NOT NULL DEFAULT '',
-                image_data BLOB NOT NULL,
+                image_data BLOB NOT NULL DEFAULT X'',
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
@@ -232,6 +242,26 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
+            -- 영수증 리워드: OCR 원문과 추출 항목. fingerprint 는 같은 영수증 재사용(다른 계정 포함) 검사용
+            CREATE TABLE IF NOT EXISTS receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+                status TEXT NOT NULL CHECK(status IN ('verified','rejected')),
+                store_name TEXT NOT NULL DEFAULT '',
+                business_number TEXT NOT NULL DEFAULT '',
+                purchased_date TEXT,
+                purchased_time TEXT,
+                total_amount INTEGER,
+                approval_number TEXT NOT NULL DEFAULT '',
+                fingerprint TEXT,
+                raw_text TEXT NOT NULL DEFAULT '',
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_receipts_user_created ON receipts(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_receipts_fingerprint ON receipts(fingerprint);
             CREATE INDEX IF NOT EXISTS idx_activity_user_created ON activity_logs(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_questionnaires_user_date ON pre_visit_questionnaires(user_id, visit_date DESC);
             CREATE INDEX IF NOT EXISTS idx_health_shares_user ON health_shares(user_id, created_at DESC);
@@ -245,6 +275,9 @@ def init_db() -> None:
         )
         # 인증 사진 재사용 검사용 dHash, 판정 근거(점수·탐지·체크 결과)
         _add_missing_columns(db, "images", {"perceptual_hash": "TEXT NOT NULL DEFAULT ''"})
+        # 사진은 파일로 저장한다 (storage.py). image_data 는 예전 DB 호환용으로 남겨 두고 비워 둔다.
+        _add_missing_columns(db, "images", {"storage_path": "TEXT NOT NULL DEFAULT ''"})
+        moved = storage.migrate_blobs(db)
         _add_missing_columns(db, "activity_logs", {"details_json": "TEXT NOT NULL DEFAULT '{}'"})
         _add_missing_columns(db, "community_posts", {
             "location_name": "TEXT NOT NULL DEFAULT ''",
@@ -275,6 +308,9 @@ def init_db() -> None:
             "author_license": "TEXT NOT NULL DEFAULT ''",
             "image_id": "INTEGER REFERENCES images(id) ON DELETE SET NULL",
         })
+    if moved:  # give the space the photo BLOBs used back to the disk (VACUUM cannot run inside a transaction)
+        with db_connection() as db:
+            db.execute("VACUUM")
 
 
 def _add_missing_columns(db: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:

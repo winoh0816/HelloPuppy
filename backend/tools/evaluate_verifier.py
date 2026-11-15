@@ -3,7 +3,7 @@
 평가 세트 (있는 것만 사용)
 - coco: Dataset/activity_eval/coco (build_coco_eval_set.py + curation.json 검수 결과) - 실제 장면
 - mpdd_walk: Dataset/activity/{train,val}/walk - 보유 MPDD 약한 산책 라벨 (개만 잘라낸 사진, 참고용)
-- oxford_dogs: Dataset/TheOxford-IIIT_Pet_Dataset/images 의 개 사진(소문자 파일명) - 산책·급여가 아닌 반려견 사진
+- oxford_dogs: Dataset/public/Oxford-IIIT-Pet/images 의 개 사진(소문자 파일명) - 산책·급여가 아닌 반려견 사진
 - user: Dataset/activity/test/{walk,feeding,other} - 직접 촬영해 넣은 사진 (가장 중요한 최종 테스트)
 
     .venv-backend\\Scripts\\python.exe -m backend.tools.evaluate_verifier --limit 150
@@ -52,7 +52,7 @@ def collect(limit: int, seed: int) -> list[tuple[str, str, Path]]:
     activity = ROOT / "Dataset" / "activity"
     mpdd = images_in(activity / "train" / "walk") + images_in(activity / "val" / "walk")
     items += [("mpdd_walk", "walk", p) for p in sample(mpdd)]
-    oxford = [p for p in images_in(ROOT / "Dataset" / "TheOxford-IIIT_Pet_Dataset" / "images") if p.name[:1].islower()]
+    oxford = [p for p in images_in(ROOT / "Dataset" / "public" / "Oxford-IIIT-Pet" / "images") if p.name[:1].islower()]
     items += [("oxford_dogs", "other", p) for p in sample(oxford)]
     for label in ("walk", "feeding", "other"):
         items += [("user", label, p) for p in images_in(activity / "test" / label)]
@@ -61,13 +61,13 @@ def collect(limit: int, seed: int) -> list[tuple[str, str, Path]]:
 
 def analysis_from_dict(data: dict) -> Analysis:
     detections = None if data["detections"] is None else [Detection(d["label"], d["confidence"], tuple(d["box"])) for d in data["detections"]]
-    return Analysis(data["activity_scores"], data["outdoor"], data["leash"], detections, data.get("sources", []))
+    return Analysis(data["activity_scores"], data["outdoor"], data["leash"], detections, data.get("sources", []), data.get("subject"))
 
 
 def analyse_all(items: list[tuple[str, str, Path]]) -> dict[str, Analysis]:
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.is_file() else {}
     status = verifier.status()
-    model_key = f"{status['clip_model']}|{status['prompt_version']}|{status['object_detector']}|{status['trained_classifier']}"
+    model_key = f"{status['clip_model']}|{status['prompt_version']}|{status['object_detector']}|{status['trained_classifier']}|subject-v1"
     results: dict[str, Analysis] = {}
     started, computed = time.time(), 0
     for _, _, path in items:
@@ -92,7 +92,7 @@ def score(items, analyses, activity: str, settings: Settings, sets: set[str] | N
     for set_name, label, path in items:
         if sets and set_name not in sets:
             continue
-        verified = decide(activity, analyses[str(path)], settings).verified
+        verified = decide(activity, analyses[str(path)], settings, verifier.walk_model).verified
         positive = label == activity
         tp += verified and positive
         fn += (not verified) and positive
@@ -128,6 +128,9 @@ def sweep(items, analyses, base: Settings, max_false_accept: float) -> Settings:
     }
     best = base
     for activity, grid in grids.items():
+        if activity == "walk" and verifier.walk_model is not None:
+            print("추천 walk: 산책 판정 모델(walk_model.json)을 쓰는 중이라 규칙 임계값은 탐색하지 않습니다.")
+            continue
         candidates = []
         for values in grid:
             trial = replace(best, **values)
@@ -158,6 +161,11 @@ def main() -> None:
     analyses = analyse_all(items)
     current = Settings.from_env()
     print("\n=== 현재 설정 ===", current)
+    if verifier.walk_model is not None:
+        cv = verifier.walk_model.info.get("cross_validation", {})
+        print("산책은 walk_model.json 으로 판단합니다. 같은 사진으로 학습했으므로 아래 산책 수치는 낙관적이고,"
+              f" 교차검증 수치는 재현율 {cv.get('recall', 0):.1%}, 정밀도 {cv.get('precision', 0):.1%},"
+              f" 오인증률 {cv.get('false_accept_rate', 0):.1%} 입니다.")
     report(items, analyses, current)
     print("\n=== 임계값 탐색 ===")
     suggested = sweep(items, analyses, current, args.max_false_accept)

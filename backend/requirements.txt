@@ -1,7 +1,5 @@
+# API 서버 핵심 (계정·포인트·건강기록·커뮤니티·사진 저장). AI 판별 없이도 동작한다.
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 python-multipart>=0.0.9
 Pillow>=10.4
-# Keep torch and torchvision versions compatible with each other and the selected OS/GPU.
-torch>=2.2
-torchvision>=0.17
