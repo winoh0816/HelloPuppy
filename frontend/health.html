@@ -28,16 +28,16 @@
         </section>
 
         <div class="health-notice" role="note">
-            보호자가 보관하는 참고용 건강기록(PHR)입니다. 동물병원 진료부·진단서·처방전을 대체하지 않으며, 진단과 처방은 담당 수의사의 판단을 따릅니다.
+            보호자가 보관하는 참고용 건강기록(PHR)입니다. 동물병원 진료부, 진단서, 처방전을 대체하지 않으며, 진단과 처방은 담당 수의사의 판단을 따릅니다.
         </div>
 
         <section class="health-section health-share-section" aria-labelledby="share-title">
             <div class="health-section-heading">
-                <div><span class="health-section-kicker">00 · CLINIC LINK</span><h2 id="share-title">동물병원에 기록 공유</h2></div>
+                <div><span class="health-section-kicker">00 CLINIC LINK</span><h2 id="share-title">동물병원에 기록 공유</h2></div>
                 <button class="health-primary-btn health-add-btn" type="button" id="addShareButton">+ 공유 링크 만들기</button>
             </div>
             <ol class="health-flow">
-                <li><strong>1번 병원</strong>에 <em>열람 + 진료기록 입력</em> 링크를 보내면, 수의사가 진단·처방을 직접 남겨요.</li>
+                <li><strong>1번 병원</strong>에 <em>열람 + 진료기록 입력</em> 링크를 보내면, 수의사가 진단, 처방을 직접 남겨요.</li>
                 <li><strong>2번 병원</strong>에 <em>열람</em> 링크를 보내면, 1번 병원 기록까지 한 화면에서 확인해요.</li>
                 <li>병원 전산(EMR)으로 옮길 때는 국제 표준 <strong>HL7 FHIR</strong> 파일을 내려받아 전달해요.</li>
             </ol>
@@ -61,7 +61,7 @@
 
         <section class="health-section" aria-labelledby="pet-profile-title">
             <div class="health-section-heading">
-                <div><span class="health-section-kicker">01 · SIGNALMENT</span><h2 id="pet-profile-title">기본 정보</h2></div>
+                <div><span class="health-section-kicker">01 SIGNALMENT</span><h2 id="pet-profile-title">기본 정보</h2></div>
                 <button class="health-text-btn" type="button" id="editProfileButton">정보 수정</button>
             </div>
             <div class="health-profile-card" id="petProfileSummary" aria-live="polite"></div>
@@ -72,7 +72,7 @@
                         <select name="species"><option value="dog">개</option><option value="cat">고양이</option><option value="other">기타</option></select>
                     </label>
                     <label>품종<input name="breed" maxlength="60" placeholder="예: 푸들 / 믹스견"></label>
-                    <label>털색·외형 특징<input name="coat_features" maxlength="300" placeholder="예: 흰색, 왼쪽 귀 갈색 반점"></label>
+                    <label>털색, 외형 특징<input name="coat_features" maxlength="300" placeholder="예: 흰색, 왼쪽 귀 갈색 반점"></label>
                     <label>생년월일<input name="birth_date" type="date"></label>
                     <label class="health-check-label"><input name="birth_date_estimated" type="checkbox"> 정확한 생일을 몰라 추정한 날짜예요</label>
                     <label>성별
@@ -88,13 +88,13 @@
                         <select name="registration_type"><option value="">선택</option><option value="internal">내장형 칩</option><option value="external">외장형 인식표</option><option value="none">미등록</option></select>
                     </label>
                     <label>생활환경
-                        <select name="living_environment"><option value="">선택</option><option value="indoor">실내</option><option value="outdoor">실외</option><option value="both">실내·실외</option></select>
+                        <select name="living_environment"><option value="">선택</option><option value="indoor">실내</option><option value="outdoor">실외</option><option value="both">실내, 실외</option></select>
                     </label>
                     <label>함께 사는 동물<input name="other_pets" maxlength="300" placeholder="예: 고양이 1마리"></label>
                     <label>보호자 이름<input name="guardian_name" maxlength="60" placeholder="보호자 성함"></label>
                     <label>보호자 연락처<input name="guardian_phone" type="tel" maxlength="30" placeholder="병원 연락용"></label>
-                    <label class="health-form-wide">진료 시 주의사항·알레르기 메모<textarea name="allergies" rows="2" maxlength="1200" placeholder="예: 겁이 많아 입질 있음, 발톱 깎기 싫어함. 알레르기는 아래 기록으로 따로 추가해 주세요."></textarea></label>
-                    <label class="health-form-wide">기타 병력 메모<textarea name="medical_notes" rows="2" maxlength="1600" placeholder="기록으로 정리하기 어려운 과거 병력·입원 이력 등"></textarea></label>
+                    <label class="health-form-wide">진료 시 주의사항, 알레르기 메모<textarea name="allergies" rows="2" maxlength="1200" placeholder="예: 겁이 많아 입질 있음, 발톱 깎기 싫어함. 알레르기는 아래 기록으로 따로 추가해 주세요."></textarea></label>
+                    <label class="health-form-wide">기타 병력 메모<textarea name="medical_notes" rows="2" maxlength="1600" placeholder="기록으로 정리하기 어려운 과거 병력, 입원 이력 등"></textarea></label>
                 </div>
                 <div class="health-form-actions"><button class="health-secondary-btn" type="button" id="cancelProfileButton">취소</button><button class="health-primary-btn" type="submit">기본 정보 저장</button></div>
             </form>
@@ -102,7 +102,7 @@
 
         <section class="health-section" aria-labelledby="questionnaire-title">
             <div class="health-section-heading">
-                <div><span class="health-section-kicker">02 · PRE-VISIT</span><h2 id="questionnaire-title">방문 전 문진표</h2></div>
+                <div><span class="health-section-kicker">02 PRE-VISIT</span><h2 id="questionnaire-title">방문 전 문진표</h2></div>
                 <button class="health-primary-btn health-add-btn" type="button" id="addQuestionnaireButton">+ 문진표 작성</button>
             </div>
             <div id="questionnaireList" aria-live="polite"></div>
@@ -112,13 +112,13 @@
                     <label>방문할 병원<input name="clinic" maxlength="160"></label>
                     <label class="health-form-wide">어디가 불편해서 가나요? (주 증상) *<textarea name="chief_complaint" rows="2" maxlength="1000" required placeholder="예: 어제 저녁부터 물 같은 설사를 4번 했어요"></textarea></label>
                     <label>증상 시작일<input name="onset_date" type="date"></label>
-                    <label>빈도·지속 시간<input name="frequency" maxlength="300" placeholder="예: 하루 3~4번"></label>
+                    <label>빈도, 지속 시간<input name="frequency" maxlength="300" placeholder="예: 하루 3~4번"></label>
                     <label>경과
                         <select name="progression"><option value="">선택</option><option value="better">좋아지는 중</option><option value="same">비슷함</option><option value="worse">나빠지는 중</option><option value="fluctuating">좋아졌다 나빠졌다 함</option></select>
                     </label>
                     <label>증상 사진 (선택)<input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
-                    <label class="health-form-wide">집에서 한 조치·먹인 약<textarea name="home_care" rows="2" maxlength="1000" placeholder="예: 반나절 금식, 사람 지사제 먹이지 않음"></textarea></label>
-                    <label class="health-form-wide">최근 변화<textarea name="recent_changes" rows="2" maxlength="1000" placeholder="사료·간식 변경, 이사·여행, 애견카페·호텔 등 다른 동물 접촉"></textarea></label>
+                    <label class="health-form-wide">집에서 한 조치, 먹인 약<textarea name="home_care" rows="2" maxlength="1000" placeholder="예: 반나절 금식, 사람 지사제 먹이지 않음"></textarea></label>
+                    <label class="health-form-wide">최근 변화<textarea name="recent_changes" rows="2" maxlength="1000" placeholder="사료, 간식 변경, 이사, 여행, 애견카페, 호텔 등 다른 동물 접촉"></textarea></label>
                     <fieldset class="health-form-wide health-system-fieldset">
                         <legend>평소와 비교한 몸 상태</legend>
                         <div id="systemFields" class="health-system-grid"></div>
@@ -131,21 +131,21 @@
 
         <section class="health-section" aria-labelledby="alerts-title">
             <div class="health-section-heading">
-                <div><span class="health-section-kicker">03 · ALERTS</span><h2 id="alerts-title">진료 전 꼭 확인할 정보</h2></div>
+                <div><span class="health-section-kicker">03 ALERTS</span><h2 id="alerts-title">진료 전 꼭 확인할 정보</h2></div>
             </div>
             <div id="clinicalAlerts"></div>
         </section>
 
         <section class="health-section" aria-labelledby="preventive-title">
             <div class="health-section-heading">
-                <div><span class="health-section-kicker">04 · PREVENTIVE</span><h2 id="preventive-title">예방접종·기생충 예방</h2></div>
+                <div><span class="health-section-kicker">04 PREVENTIVE</span><h2 id="preventive-title">예방접종, 기생충 예방</h2></div>
             </div>
             <div id="preventiveSummary"></div>
         </section>
 
         <section class="health-section" aria-labelledby="activity-title">
             <div class="health-section-heading">
-                <div><span class="health-section-kicker">05 · DIET &amp; ROUTINE</span><h2 id="activity-title">식이·생활 패턴</h2></div>
+                <div><span class="health-section-kicker">05 DIET &amp; ROUTINE</span><h2 id="activity-title">식이, 생활 패턴</h2></div>
                 <span class="health-period">최근 30일</span>
             </div>
             <div class="health-stat-grid">
@@ -158,12 +158,12 @@
                 <button class="health-text-btn" type="button" id="editFoodButton">수정</button>
             </div>
             <form id="foodForm" class="health-form health-inline-form" hidden>
-                <label class="health-form-wide">사료 브랜드·제품명<input name="food_name" maxlength="120" placeholder="예: 브랜드명 / 제품명 (처방식이면 함께 표기)"></label>
+                <label class="health-form-wide">사료 브랜드, 제품명<input name="food_name" maxlength="120" placeholder="예: 브랜드명 / 제품명 (처방식이면 함께 표기)"></label>
                 <label>하루 급여 횟수<input name="meals_per_day" type="number" min="1" max="12" step="1" placeholder="예: 2"></label>
                 <label>1회 급여량<input name="amount_per_meal" maxlength="80" placeholder="예: 40g, 종이컵 1/2"></label>
                 <label>평소 급여 시간<input name="feeding_schedule" maxlength="100" placeholder="예: 오전 8시, 오후 7시"></label>
                 <label>최근 사료 변경일<input name="diet_changed_date" type="date"></label>
-                <label class="health-form-wide">간식·사람 음식<input name="treats" maxlength="500" placeholder="예: 육포 하루 2개, 가끔 고구마"></label>
+                <label class="health-form-wide">간식, 사람 음식<input name="treats" maxlength="500" placeholder="예: 육포 하루 2개, 가끔 고구마"></label>
                 <label class="health-form-wide">영양제<input name="supplements" maxlength="500" placeholder="예: 관절 영양제, 유산균"></label>
                 <label class="health-form-wide">메모<input name="food_notes" maxlength="300"></label>
                 <div class="health-form-actions"><button class="health-secondary-btn" type="button" id="cancelFoodButton">취소</button><button class="health-primary-btn" type="submit">식이 정보 저장</button></div>
@@ -172,7 +172,7 @@
 
         <section class="health-section" aria-labelledby="medical-record-title">
             <div class="health-section-heading">
-                <div><span class="health-section-kicker">06 · HEALTH LOG</span><h2 id="medical-record-title">전체 건강 기록</h2></div>
+                <div><span class="health-section-kicker">06 HEALTH LOG</span><h2 id="medical-record-title">전체 건강 기록</h2></div>
                 <button class="health-primary-btn health-add-btn" type="button" id="addRecordButton">+ 기록 추가</button>
             </div>
             <form id="healthRecordForm" class="health-form" hidden>
@@ -181,13 +181,13 @@
                         <select name="record_type" id="recordTypeSelect"></select>
                     </label>
                     <label>날짜 *<input name="record_date" type="date" required></label>
-                    <label>병원·기관<input name="clinic" maxlength="100" placeholder="예: 해피 동물병원"></label>
+                    <label>병원, 기관<input name="clinic" maxlength="100" placeholder="예: 해피 동물병원"></label>
                     <label>제목 (선택)<input name="title" maxlength="100" placeholder="비워두면 자동으로 만들어요"></label>
                 </div>
                 <div class="health-form-grid" id="recordTypeFields"></div>
                 <div class="health-form-grid">
                     <label class="health-form-wide">메모<textarea name="notes" rows="2" maxlength="2000" placeholder="병원 안내를 그대로 옮겨 적어 주세요."></textarea></label>
-                    <label class="health-form-wide">사진 첨부 (진단서·검사결과지·처방전, 선택)<input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
+                    <label class="health-form-wide">사진 첨부 (진단서, 검사결과지, 처방전, 선택)<input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
                 </div>
                 <div class="health-form-actions"><button class="health-secondary-btn" type="button" id="cancelRecordButton">취소</button><button class="health-primary-btn" type="submit">기록 저장</button></div>
             </form>
@@ -201,11 +201,12 @@
     </main>
 
     <nav class="bottom-nav" aria-label="주요 메뉴">
-        <a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
-        <a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
-        <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
-        <a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
-        <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
+      <a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
+      <a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
+      <a href="feeding.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-feeding.svg" alt=""></span>급여</a>
+      <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
+      <a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
+      <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
     </nav>
 </div>
 </body>

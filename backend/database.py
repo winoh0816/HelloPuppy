@@ -260,6 +260,20 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
+            -- 영수증에서 읽은 품목 (구매 기록). 사용자가 고친 내용으로 덮어쓴다.
+            CREATE TABLE IF NOT EXISTS receipt_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                receipt_id INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL DEFAULT 0,
+                name TEXT NOT NULL,
+                quantity INTEGER,
+                unit_price INTEGER,
+                amount INTEGER NOT NULL,
+                category TEXT NOT NULL DEFAULT '기타 용품'
+            );
+            CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt ON receipt_items(receipt_id, position);
+            CREATE INDEX IF NOT EXISTS idx_receipt_items_user ON receipt_items(user_id);
             CREATE INDEX IF NOT EXISTS idx_receipts_user_created ON receipts(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_receipts_fingerprint ON receipts(fingerprint);
             CREATE INDEX IF NOT EXISTS idx_activity_user_created ON activity_logs(user_id, created_at DESC);
@@ -279,6 +293,17 @@ def init_db() -> None:
         _add_missing_columns(db, "images", {"storage_path": "TEXT NOT NULL DEFAULT ''"})
         moved = storage.migrate_blobs(db)
         _add_missing_columns(db, "activity_logs", {"details_json": "TEXT NOT NULL DEFAULT '{}'"})
+        # 구매 기록: log_reason NULL = 아직 계산 안 함(예전 행), '' = 기록에 포함, 'not_pet'/'duplicate'/'no_amount' = 제외 이유
+        # dataset_consent: 사진을 OCR 학습 데이터로 쓰는 데 동의(선택)했는지
+        _add_missing_columns(db, "receipts", {
+            "pet_store": "INTEGER NOT NULL DEFAULT 0",
+            "pet_amount": "INTEGER",
+            "in_log": "INTEGER NOT NULL DEFAULT 0",
+            "log_reason": "TEXT",
+            "items_corrected": "INTEGER NOT NULL DEFAULT 0",
+            "dataset_consent": "INTEGER NOT NULL DEFAULT 0",
+            "dataset_consent_at": "TEXT",
+        })
         _add_missing_columns(db, "community_posts", {
             "location_name": "TEXT NOT NULL DEFAULT ''",
             "latitude": "REAL",

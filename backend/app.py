@@ -14,13 +14,13 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import receipt, storage, verification
+from . import purchases, receipt, storage, verification
 from .database import db_connection, init_db, transaction
 from .health import (
     LIVING_ENVIRONMENTS, PROGRESSIONS, REGISTRATION_TYPES, SHARE_SCOPES, SPECIES,
@@ -59,6 +59,8 @@ TRUST_PROXY = os.getenv("HELLOPUPPY_TRUST_PROXY", "").strip().lower() in {"1", "
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    with transaction() as db:
+        purchases.backfill(db)  # receipts saved before the purchase log existed
     yield
 
 
@@ -1034,8 +1036,13 @@ def _receipt_checks(fields: receipt.ReceiptFields, line_count: int, duplicate_re
 
 
 @app.post("/api/receipts")
-async def scan_receipt(photo: UploadFile = File(...), user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """OCR a pet-shop receipt, extract its fields and award points once per receipt."""
+async def scan_receipt(photo: UploadFile = File(...), dataset_consent: bool = Form(False),
+                       user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """OCR a pet-shop receipt, extract its fields and items, log the purchase and award points once per receipt.
+
+    dataset_consent (optional, off by default): the user agrees that this receipt photo and its OCR result may be used to
+    improve our receipt OCR. Without it the photo is only kept for the reward checks.
+    """
     data = await photo.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="사진은 12MB 이하로 올려 주세요.")
@@ -1064,12 +1071,18 @@ async def scan_receipt(photo: UploadFile = File(...), user: dict[str, Any] = Dep
         image_id = _store_image(db, user_id, "receipt", photo.filename or "receipt", mime, data, photo_hash)
         rewarded_today = db.execute("""SELECT COUNT(*) AS count FROM points_ledger WHERE user_id=? AND reason='영수증 리워드' AND delta>0 AND created_at>=?""",
                                     (user_id, day_start)).fetchone()["count"]
+        # 구매 기록: 반려동물 구매이고 금액이 있으며 내 기록에 같은 영수증이 없으면 남긴다 (리워드 조건과 별개)
+        logged_dup = purchases.is_logged_duplicate(db, user_id, fingerprint) or duplicate_photo
+        in_log, log_reason = purchases.log_state(bool(fields.pet_keywords) or fields.pet_store, fields.pet_amount, logged_dup)
         cursor = db.execute("""INSERT INTO receipts(user_id,image_id,status,store_name,business_number,purchased_date,purchased_time,
-            total_amount,approval_number,fingerprint,raw_text,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            total_amount,approval_number,fingerprint,raw_text,details_json,pet_store,pet_amount,in_log,log_reason,
+            dataset_consent,dataset_consent_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (user_id, image_id, "verified" if verified else "rejected", fields.store_name or "", fields.business_number or "",
              fields.purchased_date, fields.purchased_time, fields.total_amount, fields.approval_number or "", fingerprint,
              "\n".join(line.text for line in lines),
-             json.dumps({"checks": checks, "fields": fields.to_dict(), "lines": [line.to_dict() for line in lines], **meta}, ensure_ascii=False)))
+             json.dumps({"checks": checks, "fields": fields.to_dict(), "lines": [line.to_dict() for line in lines], **meta}, ensure_ascii=False),
+             int(fields.pet_store), fields.pet_amount, in_log, log_reason, int(dataset_consent), utc_iso() if dataset_consent else None))
+        purchases.save_items(db, cursor.lastrowid, user_id, fields.items)
         if verified and rewarded_today < RECEIPT_DAILY_LIMIT:
             points_awarded = RECEIPT_POINTS
             balance = _award_points(db, user_id, points_awarded, "영수증 리워드", f"receipt:{cursor.lastrowid}")
@@ -1086,15 +1099,117 @@ async def scan_receipt(photo: UploadFile = File(...), user: dict[str, Any] = Dep
     return {
         "id": cursor.lastrowid, "verified": verified, "points_awarded": points_awarded, "balance": balance, "message": message,
         "checks": checks, "fields": fields.to_dict(), "lines": [line.text for line in lines], "ocr": meta,
+        "log": {"in_log": bool(in_log), "reason": log_reason, "pet_amount": fields.pet_amount}, "dataset_consent": dataset_consent,
     }
 
 
+RECEIPT_COLUMNS = """id,status,store_name,purchased_date,purchased_time,total_amount,pet_store,pet_amount,in_log,log_reason,
+    items_corrected,dataset_consent,image_id,created_at"""
+
+
+def _receipt_with_items(db: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    items = purchases.items_of(db, [row["id"] for row in rows])
+    return [{**dict(row), "items": items.get(row["id"], [])} for row in rows]
+
+
 @app.get("/api/receipts")
-def list_receipts(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+def list_receipts(limit: int = 20, logged_only: bool = False, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Recent receipts with their items. logged_only: only the purchases counted in the purchase log."""
+    safe_limit = max(1, min(limit, 200))
+    where = "user_id=? AND in_log=1" if logged_only else "user_id=?"
     with db_connection() as db:
-        rows = db.execute("""SELECT id,status,store_name,purchased_date,total_amount,created_at FROM receipts
-            WHERE user_id=? ORDER BY id DESC LIMIT 20""", (user["id"],)).fetchall()
-    return {"items": [dict(row) for row in rows]}
+        rows = db.execute(f"""SELECT {RECEIPT_COLUMNS} FROM receipts WHERE {where}
+            ORDER BY COALESCE(purchased_date, substr(created_at,1,10)) DESC, id DESC LIMIT ?""", (user["id"], safe_limit)).fetchall()
+        return {"items": _receipt_with_items(db, rows), "categories": purchases.CATEGORY_NAMES}
+
+
+@app.get("/api/receipts/summary")
+def receipt_summary(months: int = 6, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Pet-supply spending: total, monthly, by category and most bought products (logged receipts only)."""
+    with db_connection() as db:
+        return purchases.summary(db, int(user["id"]), max(1, min(months, 24)))
+
+
+class ReceiptItemRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=60)
+    amount: int = Field(ge=0, le=10_000_000)
+    quantity: int | None = Field(default=None, ge=1, le=999)
+    unit_price: int | None = Field(default=None, ge=0, le=10_000_000)
+    category: str = "기타 용품"
+
+
+class ReceiptItemsRequest(BaseModel):
+    items: list[ReceiptItemRequest] = Field(max_length=60)
+
+
+class DatasetConsentRequest(BaseModel):
+    consent: bool
+
+
+def _own_receipt(db: sqlite3.Connection, receipt_id: int, user_id: int) -> sqlite3.Row:
+    row = db.execute(f"SELECT {RECEIPT_COLUMNS},fingerprint FROM receipts WHERE id=? AND user_id=?", (receipt_id, user_id)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="영수증을 찾을 수 없습니다.")
+    return row
+
+
+@app.put("/api/receipts/{receipt_id}/items")
+def update_receipt_items(receipt_id: int, request: ReceiptItemsRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Fix the items OCR read. Marking every row '반려용품 아님' takes the receipt out of the purchase log, and marking a
+    row as a pet product puts a receipt that OCR missed back in. Corrected items also become checked training labels."""
+    items = [item.model_dump() for item in request.items]
+    for item in items:
+        if item["category"] not in purchases.CATEGORY_NAMES:
+            raise HTTPException(status_code=422, detail=f"알 수 없는 분류입니다: {item['category']}")
+    user_id = int(user["id"])
+    with transaction() as db:
+        row = _own_receipt(db, receipt_id, user_id)
+        amount = receipt.pet_amount(items, row["total_amount"], bool(row["pet_store"])) if items else None
+        has_pet = any(item["category"] != purchases.NOT_PET for item in items)
+        duplicate = row["log_reason"] == "duplicate" or purchases.is_logged_duplicate(db, user_id, row["fingerprint"], receipt_id)
+        in_log, reason = purchases.log_state(has_pet, amount, duplicate)
+        purchases.save_items(db, receipt_id, user_id, items)
+        db.execute("UPDATE receipts SET pet_amount=?, in_log=?, log_reason=?, items_corrected=1 WHERE id=?", (amount, in_log, reason, receipt_id))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user_id, "receipt_items_update", "receipt", receipt_id))
+        updated = db.execute(f"SELECT {RECEIPT_COLUMNS} FROM receipts WHERE id=?", (receipt_id,)).fetchall()
+        return {"receipt": _receipt_with_items(db, updated)[0]}
+
+
+@app.put("/api/receipts/{receipt_id}/dataset-consent")
+def update_dataset_consent(receipt_id: int, request: DatasetConsentRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Give or withdraw consent to use this receipt photo for OCR training. Withdrawn photos are left out of every later export."""
+    user_id = int(user["id"])
+    with transaction() as db:
+        _own_receipt(db, receipt_id, user_id)
+        db.execute("UPDATE receipts SET dataset_consent=?, dataset_consent_at=? WHERE id=?",
+                   (int(request.consent), utc_iso() if request.consent else None, receipt_id))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+                   (user_id, "dataset_consent_on" if request.consent else "dataset_consent_off", "receipt", receipt_id))
+    return {"id": receipt_id, "dataset_consent": request.consent}
+
+
+@app.get("/api/missions/today")
+def missions_today(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Today's reward missions for the home screen: how many rewards each mission already paid out today."""
+    local_midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = local_midnight.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    reasons = {"walk": f"{ACTIVITY_LABELS['walk']} 인증", "feeding": f"{ACTIVITY_LABELS['feeding']} 인증", "receipt": "영수증 리워드"}
+    missions = [
+        {"key": "walk", "label": "산책 인증", "points": ACTIVITY_POINTS["walk"], "daily_limit": DAILY_REWARD_LIMITS["walk"], "page": "auth.html"},
+        {"key": "feeding", "label": "급여 인증", "points": ACTIVITY_POINTS["feeding"], "daily_limit": DAILY_REWARD_LIMITS["feeding"], "page": "feeding.html"},
+        {"key": "receipt", "label": "영수증 리워드", "points": RECEIPT_POINTS, "daily_limit": RECEIPT_DAILY_LIMIT, "page": "receipt.html"},
+    ]
+    with db_connection() as db:
+        rows = db.execute("""SELECT reason, COUNT(*) AS count, SUM(delta) AS points FROM points_ledger
+            WHERE user_id=? AND delta>0 AND created_at>=? GROUP BY reason""", (user["id"], day_start)).fetchall()
+    earned = {row["reason"]: (int(row["count"]), int(row["points"])) for row in rows}
+    for mission in missions:
+        count, _ = earned.get(reasons[mission["key"]], (0, 0))
+        mission["rewarded_today"] = count
+        mission["done"] = count >= mission["daily_limit"]
+    points_today = sum(earned.get(reason, (0, 0))[1] for reason in reasons.values())
+    return {"missions": missions, "points_today": points_today}
 
 
 @app.get("/api/activity/logs")

@@ -6,41 +6,23 @@
 <div class="tabs" style="display:flex;gap:7px;margin:0 0 14px"><button class="pill" onclick="filterFeed('all',this)" style="border:0">전체</button><button class="pill" onclick="filterFeed('walk',this)" style="border:0;background:white">산책</button><button class="pill" onclick="filterFeed('daily',this)" style="border:0;background:white">일상</button><button class="pill" onclick="filterFeed('info',this)" style="border:0;background:white">정보공유</button></div>
 <div id="composer" class="card" style="display:none"><b>새 게시글 쓰기 ✏️</b><input id="postTitle" class="field" placeholder="제목 (선택)"><textarea id="postBody" class="field" rows="3" placeholder="우리 강아지 이야기를 들려주세요 🐾"></textarea><label class="community-location-label" for="postLocation">📍 장소 공유 <span>선택</span></label><input id="postLocation" class="field" placeholder="장소 이름을 검색해 선택해 주세요" autocomplete="off"><p id="locationHelp" class="location-help">검색 결과에서 선택한 장소는 공개 지도에 표시됩니다.</p><input id="postLatitude" type="hidden"><input id="postLongitude" type="hidden"><label class="community-photo-label">사진 첨부 (선택, 최대 50MB)<input id="postPhoto" type="file" accept="image/jpeg,image/png,image/webp"></label><button class="btn" onclick="publishPost()">게시하기</button></div>
 <div id="serverPosts" aria-live="polite"></div>
-<article class="card feed-post" data-kind="walk"><div class="post-meta"><div class="avatar"><img src="assets/images/brand/emoji-start.png" alt=""></div><div><b>초코 맘</b><div class="muted">방금 전 · 📍 한강공원</div></div><span style="margin-left:auto">•••</span></div>
+<article class="card feed-post" data-kind="walk"><div class="post-meta"><div class="avatar"><img src="assets/images/brand/emoji-start.png" alt=""></div><div><b>초코 맘</b><div class="muted">방금 전, 📍 한강공원</div></div><span style="margin-left:auto">•••</span></div>
 <img src="https://images.unsplash.com/photo-1548199973-03cce0bbc87b?auto=format&fit=crop&w=900&q=85" class="img-placeholder" alt="공원에서 함께 산책하는 강아지들">
 <p class="post-copy">오늘 날씨가 너무 좋아서 한강 산책 나왔어요! 바람도 선선하고 초코도 신났어요 🐾 멍냥산책과 함께라 더 즐거운 하루!</p>
-<div class="post-actions muted">예시 게시글 · 반응은 저장되지 않습니다.</div>
+<div class="post-actions muted">예시 게시글. 반응은 저장되지 않습니다.</div>
 <p class="muted" style="border-top:1px solid var(--line);padding-top:10px;margin-bottom:0"><b>두부 아빠:</b> 동네 산책로 좋네요~ 코스 공유 부탁드려요!</p></article>
 <article class="card feed-post" data-kind="daily"><div class="post-meta"><div class="avatar" style="background:#e5eddb"><img src="assets/images/brand/emoji-like.png" alt=""></div><div><b>보리 누나</b><div class="muted">2시간 전</div></div></div>
 <img src="https://images.unsplash.com/photo-1589924691995-400dc9ecc119?auto=format&fit=crop&w=900&q=85" class="img-placeholder" alt="강아지 사료와 식사">
 <p class="post-copy">저녁밥 야무지게 먹는 보리! 급여 시간 맞춰서 건강 기록도 완료했어요 ㅎㅎ 🥣</p>
-<div class="post-actions muted">예시 게시글 · 반응은 저장되지 않습니다.</div></article>
+<div class="post-actions muted">예시 게시글. 반응은 저장되지 않습니다.</div></article>
 </div>
 <nav class="bottom-nav">
-  <a href="index.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>
-    홈
-  </a>
-
-  <a href="auth.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>
-    산책
-  </a>
-
-  <a href="shop.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>
-    상점
-  </a>
-
-  <a href="feed.html" class="nav-item active" aria-current="page">
-    <span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>
-    커뮤니티
-  </a>
-
-  <a href="mypage.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>
-    설정
-  </a>
+  <a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
+  <a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
+  <a href="feeding.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-feeding.svg" alt=""></span>급여</a>
+  <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
+  <a href="feed.html" class="nav-item active" aria-current="page"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
+  <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
 </nav>
 <script src="assets/js/api-client.js"></script>
 <script src="assets/js/map-config.js"></script>

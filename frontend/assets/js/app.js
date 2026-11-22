@@ -160,23 +160,40 @@ function initPointShop() {
 async function initHomeAccountSummary() {
     const points = document.getElementById("homePoints");
     if (!points) return;
+    // 홈의 포인트 표시는 링크(상점)라 안에 다른 링크를 넣지 않고 주소만 바꾼다.
+    const toLogin = (text) => {
+        points.textContent = text;
+        if (points.tagName === "A") points.href = "account.html";
+        else points.innerHTML = `<a href="account.html">${text}</a>`;
+    };
     if (!window.HelloPuppyAPI?.isLoggedIn()) {
-        points.innerHTML = '<a href="account.html">로그인</a> 후 포인트 확인';
+        toLogin("로그인하고 포인트 받기");
         return;
     }
     try {
         const result = await apiRequest("/api/points");
         points.textContent = `🐾 ${Number(result.balance).toLocaleString("ko-KR")} P`;
-    } catch (_) { points.innerHTML = '<a href="account.html">다시 로그인</a>'; }
+    } catch (_) { toLogin("다시 로그인"); }
 }
 
 function startCameraAuth() {
     return verifyActivityPhoto("walk", "walk-photo", "walk-photo-status");
 }
 
+const RECEIPT_CONSENT_KEY = "helloPuppyReceiptDatasetConsent";
+
 function startOCR() {
-    return verifyActivityPhoto("receipt", "receipt-photo", "receipt-photo-status", "/api/receipts", "영수증 글자를 읽고 있습니다...");
+    const consent = document.getElementById("receipt-dataset-consent");
+    if (consent) localStorage.setItem(RECEIPT_CONSENT_KEY, consent.checked ? "1" : "0");
+    return verifyActivityPhoto("receipt", "receipt-photo", "receipt-photo-status", "/api/receipts", "영수증 글자를 읽고 있습니다...",
+        { dataset_consent: consent?.checked ? "true" : "false" });
 }
+
+// 학습 데이터 동의는 기본 해제. 사용자가 직접 켠 경우에만 다음 번에도 켜 둔다.
+(function restoreReceiptConsent() {
+    const consent = document.getElementById("receipt-dataset-consent");
+    if (consent) consent.checked = localStorage.getItem(RECEIPT_CONSENT_KEY) === "1";
+}());
 
 function previewFeedingPhoto(event) { previewVerificationPhoto(event, "feeding"); }
 
@@ -220,11 +237,21 @@ function renderReceiptDetails(result) {
         ["매장", fields.store_name], ["사업자번호", fields.business_number],
         ["거래일시", [fields.purchased_date, fields.purchased_time].filter(Boolean).join(" ")],
         ["결제 금액", won(fields.total_amount)], ["승인번호", fields.approval_number],
-        ["반려동물 품목", (fields.items || []).join(", ")],
     ].map(([label, value]) => `<div><dt>${label}</dt><dd>${value ? escapeShopText(String(value)) : '<span class="muted">인식 못 함</span>'}</dd></div>`).join("");
+    const items = (fields.items || []).map((item) => `<li class="${item.category === "반려용품 아님" ? "is-not-pet" : ""}">
+        <span class="receipt-item-name"><span>${escapeShopText(item.name)}</span><span class="chip">${escapeShopText(item.category)}</span></span>
+        <span class="receipt-item-amount">${item.quantity > 1 ? `${item.quantity}개 ` : ""}${won(item.amount)}</span></li>`).join("");
+    const reasons = { duplicate: "이미 구매 기록에 있는 영수증이라 다시 넣지 않았어요.", not_pet: "반려용품을 찾지 못해 구매 기록에는 넣지 않았어요.",
+        no_amount: "금액을 읽지 못해 구매 기록에는 넣지 않았어요." };
+    const log = result.log
+        ? `<span class="receipt-log-note">${result.log.in_log
+            ? `구매 기록에 저장했어요 (반려용품 ${won(result.log.pet_amount)}).`
+            : escapeShopText(reasons[result.log.reason] || "")} <a href="purchases.html">구매 기록에서 보기, 수정 ›</a></span>`
+        : "";
     const lines = (result.lines || []).map((line) => escapeShopText(line)).join("\n");
     return `<dl class="receipt-fields">${rows}</dl>
-        <details class="receipt-raw"><summary>읽은 글자 전체 보기 (${(result.lines || []).length}줄 · ${result.ocr?.seconds ?? "-"}초)</summary><pre>${lines || "읽은 글자가 없어요."}</pre></details>`;
+        <div class="receipt-result-items"><h4>읽은 품목 ${(fields.items || []).length}개</h4>${items ? `<ul class="receipt-items">${items}</ul>` : '<p class="muted">품목 줄을 찾지 못했어요. 구매 기록에서 직접 넣을 수 있어요.</p>'}${log}</div>
+        <details class="receipt-raw"><summary>읽은 글자 전체 보기 (${(result.lines || []).length}줄, ${result.ocr?.seconds ?? "-"}초)</summary><pre>${lines || "읽은 글자가 없어요."}</pre></details>`;
 }
 
 // 서버가 돌려준 판정 근거(checks)를 통과/실패/참고로 나눠 보여준다.
@@ -243,7 +270,7 @@ function renderVerificationResult(activity, result) {
         <p>${escapeShopText(result.message || "")}</p>${checks ? `<ul>${checks}</ul>` : ""}${result.fields ? renderReceiptDetails(result) : ""}`;
 }
 
-async function verifyActivityPhoto(activity, inputId, statusId, endpoint = `/api/verify/${activity}`, loadingText = "백엔드 AI가 사진을 판별하고 있습니다...") {
+async function verifyActivityPhoto(activity, inputId, statusId, endpoint = `/api/verify/${activity}`, loadingText = "백엔드 AI가 사진을 판별하고 있습니다...", extraFields = {}) {
     const input = document.getElementById(inputId);
     const status = document.getElementById(statusId);
     const resultBox = document.getElementById(`${activity}-result`);
@@ -262,6 +289,7 @@ async function verifyActivityPhoto(activity, inputId, statusId, endpoint = `/api
     if (scanLine) scanLine.style.display = "block";
     try {
         const form = new FormData(); form.append("photo", file, file.name);
+        Object.entries(extraFields).forEach(([key, value]) => form.append(key, value));
         const token = window.HelloPuppyAPI.token();
         const response = await fetch(`${VERIFICATION_API_BASE}${endpoint}`, {
             method: "POST", body: form, headers: { Authorization: `Bearer ${token}` }

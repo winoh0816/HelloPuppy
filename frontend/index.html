@@ -1,93 +1,80 @@
 <!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 홈</title><link rel="stylesheet" href="assets/css/style.css?v=map-heart-markers-1"><script src="assets/js/api-client.js" defer></script><script src="assets/js/app.js" defer></script></head>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 홈</title><link rel="stylesheet" href="assets/css/style.css?v=home-missions-1"><script src="assets/js/app.js" defer></script></head>
 <body><div class="app-container">
 <header><h1><img class="brand-logo" src="assets/images/brand/puppy-app-icon.png" alt="">안녕멍뭉</h1><a href="mypage.html" aria-label="설정" style="text-decoration:none;font-size:22px"><img class="brand-icon" src="assets/images/brand/nav-settings.png" alt=""></a></header>
 <div class="content">
-  <section class="hero-card"><h2>오늘도<br>즐거운 산책!</h2><p>강아지와 함께하는<br>더 행복한 하루</p><img class="hero-mascot" src="assets/images/brand/puppy-walk-hero-card.jpg" alt="산책을 즐기는 안녕멍뭉 캐릭터"></section>
-  <div class="section-heading">📍 오늘의 산책 추천 <a class="muted" href="auth.html">산책 인증 ›</a></div>
+  <section class="home-greeting">
+    <div>
+      <small id="homeToday">오늘의 인증</small>
+      <h2 id="homeGreeting">오늘도 인증하고<br>포인트 받아요</h2>
+    </div>
+    <a class="pill home-points" id="homePoints" href="shop.html">로그인 후 포인트 확인</a>
+  </section>
+
+  <!-- 핵심 기능: 산책과 급여 인증. 화면 맨 위에 크게 두고, 오늘 적립 횟수를 서버에서 받아 보여 준다. -->
+  <section class="core-missions" aria-label="오늘의 인증">
+    <a class="core-mission core-mission--walk" href="auth.html" data-mission="walk">
+      <span class="core-mission-reward">+100P</span>
+      <img class="core-mission-art" src="assets/images/brand/emoji-walk.png" alt="">
+      <strong class="core-mission-title">산책 인증</strong>
+      <span class="core-mission-desc">산책 사진 한 장이면 끝</span>
+      <span class="core-mission-progress" data-progress aria-hidden="true"><i></i><i></i></span>
+      <span class="core-mission-status" data-status>하루 2번 적립</span>
+      <span class="core-mission-cta" data-cta><img src="assets/images/brand/icon-camera.png" alt="">지금 인증하기</span>
+    </a>
+    <a class="core-mission core-mission--feeding" href="feeding.html" data-mission="feeding">
+      <span class="core-mission-reward">+50P</span>
+      <img class="core-mission-art" src="assets/images/brand/emoji-drink.png" alt="">
+      <strong class="core-mission-title">급여 인증</strong>
+      <span class="core-mission-desc">밥 먹는 사진을 찍어요</span>
+      <span class="core-mission-progress" data-progress aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="core-mission-status" data-status>하루 3번 적립</span>
+      <span class="core-mission-cta" data-cta><img src="assets/images/brand/icon-camera.png" alt="">지금 인증하기</span>
+    </a>
+  </section>
+  <p class="core-missions-note" id="missionNote" role="status">AI가 사진을 확인하면 바로 포인트가 쌓여요.</p>
+
+  <section class="receipt-strip" aria-label="영수증 인증과 구매 기록">
+    <a class="receipt-strip-main" href="receipt.html">
+      <span class="receipt-strip-icon"><img src="assets/images/brand/icon-camera.png" alt=""></span>
+      <span><strong>영수증 인증 <em>+30P</em></strong><small>펫샵 영수증을 찍으면 구매 기록도 남아요</small></span>
+    </a>
+    <a class="receipt-strip-log" href="purchases.html">
+      <small>구매 기록</small>
+      <strong id="homeMonthSpend">보러 가기</strong>
+    </a>
+  </section>
+
+  <div class="section-heading">📍 오늘의 산책 추천 <a class="muted" href="map.html">지도 보기 ›</a></div>
   <section class="home-walk-map-card" aria-label="커뮤니티 산책 코스 지도 미리보기">
     <div class="home-walk-map-heading"><span><strong>우리 동네 산책 코스</strong><small id="homeWalkMapStatus" role="status">커뮤니티 장소를 불러오는 중이에요…</small></span><span class="home-map-heart-mark" aria-hidden="true">♥</span></div>
     <div class="home-walk-map-preview-wrap"><div id="homeWalkMap" class="home-walk-map-preview"></div><a class="home-map-open-hint" href="map.html">지도 크게 보기 <b>↗</b></a></div>
     <a class="home-walk-map-cta" href="map.html">커뮤니티 추천 장소 모두 보기 <span>›</span></a>
   </section>
-  <div class="section-heading">🌱 내 반려견의 오늘 활동 <span class="pill" id="homePoints">로그인 후 포인트 확인</span></div>
+
+  <div class="section-heading">🌱 반려견 관리</div>
   <a class="health-shortcut" href="health.html">
     <span class="health-shortcut-icon"><img src="assets/images/brand/icon-heart.png" alt=""></span>
     <span><strong>동물병원 건강 요약</strong><small>병원 방문 전 반려견 정보와 생활 기록을 준비해요</small></span>
     <span class="health-shortcut-arrow">›</span>
   </a>
-<!-- 포인트 상점 바로가기 -->
-<a href="shop.html" class="shop-shortcut">
-  <div class="shop-shortcut-icon"><img src="assets/images/brand/icon-bone.png" alt=""></div>
-
-  <div class="shop-shortcut-info">
-    <strong>포인트 상점</strong>
-    <p>모은 포인트로 간식과 사료 샘플을 교환해요!</p>
-  </div>
-  <span class="shop-shortcut-arrow"></span>
-</a>
-  <div class="card"><div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:800"><span>오늘 목표 산책</span><span style="color:#ff7059">2,000걸음 남았어요!</span></div><div class="progress"><span></span></div><p class="muted" style="margin-bottom:0">조금만 더 걸으면 오늘의 목표 달성! 💗</p></div>
-  <div class="section-heading">🎯 미션 인증하기</div>
-  
-  <a href="auth.html">
-    <div class="mission-card">
-      <div class="mission-icon"><img src="assets/images/brand/icon-paw.png" alt=""></div>
-      <div>
-        <strong>산책 인증하기</strong>
-        <div class="muted">GPS 기반 야외 활동 인증 (+100P)</div>
-      </div>
-      <span style="margin-left:auto;color:#b6a49a">›</span>
+  <a href="shop.html" class="shop-shortcut">
+    <div class="shop-shortcut-icon"><img src="assets/images/brand/icon-bone.png" alt=""></div>
+    <div class="shop-shortcut-info">
+      <strong>포인트 상점</strong>
+      <p>모은 포인트로 간식과 사료 샘플을 교환해요!</p>
     </div>
-  </a>
-
-  <a href="feeding.html">
-    <div class="mission-card">
-      <div class="mission-icon"><img src="assets/images/brand/emoji-drink.png" alt=""></div>
-      <div>
-        <strong>식사/급여 인증하기</strong>
-        <div class="muted">사료 급여 사진 촬영 및 AI 검증 (+50P)</div>
-      </div>
-      <span style="margin-left:auto;color:#b6a49a">›</span>
-    </div>
-  </a>
-
-  <a href="receipt.html">
-    <div class="mission-card">
-      <div class="mission-icon"><img src="assets/images/brand/icon-camera.png" alt=""></div>
-      <div>
-        <strong>영수증 리워드</strong>
-        <div class="muted">오프라인 펫샵 결제 영수증 인증 (+30P)</div>
-      </div>
-      <span style="margin-left:auto;color:#b6a49a">›</span>
-    </div>
+    <span class="shop-shortcut-arrow"></span>
   </a>
 
   <div class="section-heading">💬 커뮤니티 소식 <a class="muted" href="feed.html">더보기 ›</a></div>
   <div id="homeLatestCommunity" class="card" aria-live="polite" aria-busy="true"><p class="muted">최신 커뮤니티 소식을 불러오는 중이에요…</p></div>
 </div>
 <nav class="bottom-nav">
-  <a href="index.html" class="nav-item active" aria-current="page">
-    <span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>
-    홈
-  </a>
-
-  <a href="auth.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>
-    산책
-  </a>
-
-  <a href="shop.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>
-    상점
-  </a>
-
-  <a href="feed.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>
-    커뮤니티
-  </a>
-
-  <a href="mypage.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>
-    설정
-  </a>
-</nav><script src="assets/js/api-client.js"></script><script src="assets/js/map-config.js"></script><script src="assets/js/home-map-preview.js?v=map-heart-markers-1"></script><script src="assets/js/home-community.js?v=latest-post"></script></div></body></html>
+  <a href="index.html" class="nav-item active" aria-current="page"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
+  <a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
+  <a href="feeding.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-feeding.svg" alt=""></span>급여</a>
+  <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
+  <a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
+  <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
+</nav><script src="assets/js/api-client.js"></script><script src="assets/js/map-config.js"></script><script src="assets/js/home-map-preview.js?v=map-heart-markers-1"></script><script src="assets/js/home-community.js?v=latest-post"></script><script src="assets/js/home-missions.js?v=1"></script></div></body></html>
