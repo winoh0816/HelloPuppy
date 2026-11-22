@@ -1,4 +1,4 @@
-# 이미지에는 backend 코드만 들어간다 (프런트는 nginx 가 볼륨으로 서빙)
+# 이미지에는 backend 코드만 들어간다 (프론트는 nginx 가 볼륨으로 서빙)
 *
 !backend/
 backend/data/

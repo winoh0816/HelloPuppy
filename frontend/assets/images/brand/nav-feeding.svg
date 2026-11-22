@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="#97837d" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 급여(밥그릇) 내비게이션 아이콘: nav-walk.png 등과 같은 색·선 굵기 -->
+  <path d="M9 31h46l-4.5 15.5c-.8 2.7-3.2 4.5-6 4.5H19.5c-2.8 0-5.2-1.8-6-4.5z"/>
+  <path d="M6 31h52"/>
+  <circle cx="23" cy="22" r="3.6"/>
+  <circle cx="32.5" cy="17" r="3.6"/>
+  <circle cx="41.5" cy="22.5" r="3.6"/>
+</svg>

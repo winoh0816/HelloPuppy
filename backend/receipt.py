@@ -60,8 +60,10 @@ class ReceiptFields:
     purchased_time: str | None = None  # HH:MM
     total_amount: int | None = None
     approval_number: str | None = None
-    items: list[str] = field(default_factory=list)
+    items: list[dict[str, Any]] = field(default_factory=list)  # LineItem.to_dict(): name, amount, quantity, unit_price, category
     pet_keywords: list[str] = field(default_factory=list)
+    pet_store: bool = False
+    pet_amount: int | None = None  # money spent on pet supplies on this receipt (purchase log)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -215,13 +217,172 @@ def parse_receipt(lines: list[str]) -> ReceiptFields:
 
     lower = whole.lower()
     fields.pet_keywords = sorted({word for word in PET_KEYWORDS if word.lower() in lower}, key=PET_KEYWORDS.index)
-    # 품목: 반려동물 단어가 들어 있고 머리글·합계 줄이 아닌 줄
-    for text, small in zip(texts, compact):
-        if any(word.lower() in small.lower() for word in PET_KEYWORDS) and _compact(fields.store_name or "\0") not in small \
-                and not any(word.lower() in small.lower() for word in TOTAL_KEYWORDS + NOT_TOTAL_WORDS + HEADER_WORDS):
-            fields.items.append(text[:80])
-    fields.items = fields.items[:12]
+    # 매장 정보는 거래일·품목 머리글보다 위에 있다. 그 아래 품목 줄('강아지 육포')로 편의점을 펫샵으로 보지 않게 한다.
+    head_end = next((i for i, t in enumerate(texts) if _find_date(t) or ITEM_HEADER.search(_compact(t))), min(len(texts), 6))
+    fields.pet_store = is_pet_store(fields.store_name, texts[:min(head_end, 8)])
+    fields.items = [item.to_dict() for item in categorize(parse_items(texts), fields.pet_store)]
+    fields.pet_amount = pet_amount(fields.items, fields.total_amount, fields.pet_store)
     return fields
+
+
+# ------------------------------------------------------------------------------------------------ 품목 (구매 기록)
+# 품목 영역: 머리글(상품명·단가·수량) 다음부터 합계·과세 줄 전까지. 실제 영수증(KORIE) 품목 정답으로 맞춘 규칙이다.
+ITEM_HEADER = re.compile(r"상품명|품\s*명|품목|메뉴|단가.*수량|수량.*금액")
+ITEM_END = re.compile(r"합\s*계|과세|관세|면세|부가세|부가가치|공급가|총\s*(구매|금액|액|합계|수량|품목)|결제|받을|청구|판매\s*금액|소\s*계|"
+                      r"할인\s*금액|봉사료|주문\s*(총|합계)|공급\s*대가|^\*?\s*표시")
+ITEM_NOT_NAME = re.compile(r"^[-(]?\s*(행사|에누리|에두리|할인|쿠폰|증정|덤|ㄴ)|^-")
+LEADING_CODE = re.compile(r"^\s*(?:\(\s*\d{1,3}\s*\)|\[\s*\d{1,3}\s*\]|\d{2,6}(?=[^\d,.\s]|\s+\D)|\d{1,3}\.)\s*")
+BARCODE = re.compile(r"\[\s*\d{3,}\s*\]|(?<!\d)\d{8,14}(?!\d)")
+NUMERIC_TOKEN = re.compile(r"^[-_]?(?:\d{1,3}(?:[,.]\d{3})+|\d+)(?:개|ea|EA|[KkXx×#*원])*$")
+MARK_TOKEN = re.compile(r"^[#*×xX]+$")  # 면세(#)·할인(*) 표시만 있는 조각
+
+
+@dataclass
+class LineItem:
+    name: str
+    amount: int
+    quantity: int | None = None
+    unit_price: int | None = None
+    category: str = "기타 용품"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _to_int(token: str) -> int | None:
+    token = re.sub(r"(?:개|ea|EA|[KkXx×#*원_])+$", "", token.lstrip("_"))
+    negative = token.startswith("-")
+    digits = re.sub(r"[^\d]", "", token)
+    if not digits or len(digits) > 9:
+        return None
+    return -int(digits) if negative else int(digits)
+
+
+def _split_item_line(text: str) -> tuple[str, list[int]]:
+    """'002 참고을)콤식용유1.8 8809056511988 5, 990 1 5,990*' -> ('참고을)콤식용유1.8', [5990, 1, 5990])."""
+    text = BARCODE.sub(" ", unicodedata.normalize("NFKC", text))
+    text = re.sub(r"(\d),\s+(\d{3})(?!\d)", r"\1,\2", text)  # '5, 990' -> '5,990'
+    text = LEADING_CODE.sub("", text).lstrip(" *#")  # '*', '#' 는 면세·할인 표시
+    tokens = [token.strip("'\"`") for token in text.split()]
+    while tokens and MARK_TOKEN.match(tokens[-1]):
+        tokens.pop()
+    numbers: list[int] = []
+    popped: list[str] = []
+    while tokens and NUMERIC_TOKEN.match(tokens[-1]):
+        token = tokens.pop()
+        value = _to_int(token)
+        if value is not None:
+            numbers.insert(0, value)
+            popped.insert(0, token)
+    if len(numbers) == 1 and tokens and not re.search(r"\d[,.]\d{3}", popped[0]):
+        # '식빵 7689'(768g 오인식)처럼 이름 끝에 붙은 숫자 하나는 가격이 아니라 이름의 일부
+        tokens.append(popped[0])
+        numbers = []
+    if len(numbers) >= 4 and numbers[0] >= 100_000:  # 맨 앞의 6~7자리 상품코드
+        numbers = numbers[1:]
+    return " ".join(tokens).strip(" ,.:;|[]()"), numbers
+
+
+def _has_name(text: str) -> bool:
+    return len(re.findall(r"[가-힣A-Za-z]", text)) >= 2
+
+
+def _item_from(name: str, numbers: list[int]) -> LineItem | None:
+    values = [n for n in numbers if n >= 0]
+    prices = [n for n in values if n >= 10]
+    if not prices:
+        return None
+    amount = values[-1] if values[-1] >= 10 else prices[-1]
+    small = [n for n in values[:-1] if 0 < n < 100]
+    quantity = small[-1] if small else (1 if len(prices) == 1 else None)
+    # 단가 수량 금액 순서: 수량 바로 앞 값이 단가
+    if len(values) >= 3 and 0 < values[-2] < 100 and values[-3] >= 10:
+        unit = values[-3]
+    else:
+        unit = prices[0] if len(prices) >= 2 else (amount // quantity if quantity and amount % quantity == 0 else None)
+    if amount > 10_000_000 or len(name) > 60:
+        return None
+    return LineItem(name=name, amount=amount, quantity=quantity, unit_price=unit)
+
+
+def parse_items(texts: list[str]) -> list[LineItem]:
+    """Item name + amount rows of a receipt (name and price on one line, or name line followed by a barcode/price line)."""
+    start = next((i + 1 for i, t in enumerate(texts) if ITEM_HEADER.search(_compact(t))), None)
+    if start is None:  # no header row: items usually follow the sale date line
+        start = next((i + 1 for i, t in enumerate(texts) if _find_date(t)), 0)
+    items: list[LineItem] = []
+    pending: str | None = None
+    for text in texts[start:]:
+        if ITEM_END.search(_compact(text)):
+            break
+        name, numbers = _split_item_line(text)
+        named = _has_name(name) and not ITEM_NOT_NAME.search(name)
+        if named and numbers:
+            item = _item_from(name, numbers)
+            if item:
+                items.append(item)
+                pending = None
+                continue
+        if named and not numbers:
+            pending = name
+        elif numbers and pending and (item := _item_from(pending, numbers)):
+            items.append(item)
+            pending = None
+    return items[:40]
+
+
+# 품목 분류. 앞에 있는 분류가 우선한다 (예: '덴탈껌'은 간식).
+CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
+    ("병원/진료", ("진료", "진찰", "접종", "백신", "검사", "처치", "주사", "입원", "수술", "처방", "엑스레이", "초음파", "중성화", "스케일링")),
+    ("건강/영양제", ("영양제", "유산균", "관절", "오메가", "비타민", "구충", "사상충", "넥스가드", "브라벡토", "레볼루션", "프론트라인", "안약", "귀세정")),
+    ("간식", ("간식", "개껌", "덴탈", "껌", "츄", "저키", "져키", "트릿", "육포", "비스킷", "쿠키", "스틱", "큐브", "동결건조", "그리니즈", "펫밀크", "캔")),
+    ("사료", ("사료", "키블", "그레인프리", "어덜트", "퍼피", "시니어", "로얄캐닌", "로얄캐닝", "오리젠", "아카나", "나우", "ANF", "뉴트로", "힐스",
+              "내추럴코어", "하림펫푸드", "습식", "파우치", "주식")),
+    ("배변/위생", ("배변", "패드", "기저귀", "매너벨트", "물티슈", "탈취", "소독", "모래", "응가")),
+    ("미용/목욕", ("샴푸", "린스", "컨디셔너", "미용", "빗", "브러시", "브러쉬", "발톱", "미스트", "칫솔", "치약", "목욕", "트리밍")),
+    ("장난감", ("장난감", "토이", "터그", "노즈워크", "인형", "삑삑", "공놀이", "원반", "라텍스")),
+    ("산책/외출", ("하네스", "목줄", "리드줄", "가슴줄", "이동장", "켄넬", "유모차", "인식표", "산책", "카시트")),
+    ("생활용품", ("방석", "쿠션", "하우스", "울타리", "식기", "급수기", "급식기", "밥그릇", "물그릇", "의류", "옷", "계단", "매트", "스크래쳐")),
+]
+NOT_PET = "반려용품 아님"
+CATEGORY_NAMES = [name for name, _ in CATEGORIES] + ["기타 용품", NOT_PET]
+STORE_PET_WORDS = ["애견", "애완", "반려", "펫", "pet", "강아지", "멍멍", "댕댕", "퍼피", "puppy", "dog", "동물병원", "동물의료", "캣"]
+
+
+def is_pet_store(store_name: str | None, top_lines: list[str]) -> bool:
+    text = _compact(" ".join([store_name or "", *top_lines])).lower()
+    return any(word.lower() in text for word in STORE_PET_WORDS)
+
+
+def category_of(name: str) -> str | None:
+    small = _compact(name).lower()
+    for category, words in CATEGORIES:
+        if any(word.lower() in small for word in words):
+            return category
+    return None
+
+
+def categorize(items: list[LineItem], pet_store: bool) -> list[LineItem]:
+    """Pet shop / animal hospital: every row is a pet purchase. Elsewhere (mart, convenience store) only rows that name a
+    pet product count, so groceries and a 'xylitol gum' are not logged as dog supplies."""
+    for item in items:
+        found = category_of(item.name)
+        if pet_store:
+            item.category = found or "기타 용품"
+        else:
+            strong = any(word.lower() in _compact(item.name).lower() for word in PET_KEYWORDS)
+            item.category = (found or "기타 용품") if strong else NOT_PET
+    return items
+
+
+def pet_amount(items: list[dict[str, Any]], total: int | None, pet_store: bool) -> int | None:
+    """Money spent on pet supplies in this receipt: what was paid at a pet shop, otherwise the pet rows only."""
+    pet_items = [item for item in items if item["category"] != NOT_PET]
+    if pet_store and total and len(pet_items) == len(items):
+        return total  # discounts are applied to the paid total, not to each row
+    if pet_items:
+        return sum(int(item["amount"]) for item in pet_items)
+    return total if pet_store else None
 
 
 DEFAULT_ENGINE_PARAMS: dict[str, Any] = {}

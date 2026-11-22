@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 영수증</title><link rel="stylesheet" href="assets/css/style.css?v=receipt-1"></head>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 영수증</title><link rel="stylesheet" href="assets/css/style.css?v=receipt-2"></head>
 <body><div class="app-container"><header><h1><img class="brand-icon" src="assets/images/brand/icon-bone.png" alt=""> 영수증 리워드</h1></header>
     <div class="content">
         <p>오프라인 펫샵 결제 영수증을 인증하고<br>포인트를 받으세요!</p>
@@ -9,38 +9,32 @@
             <div class="scan-line"></div>
         </div>
         <input type="file" id="receipt-photo" accept="image/*" capture="environment" hidden onchange="previewVerificationPhoto(event, 'receipt')">
-        <button class="btn" type="button" onclick="document.getElementById('receipt-photo').click()"><img class="brand-icon" src="assets/images/brand/icon-camera.png" alt=""> 영수증 촬영·사진 선택</button>
-        <p id="receipt-photo-status" class="photo-status" role="status">매장명·거래일시·합계 금액이 잘리지 않게 찍어 주세요.</p>
-        <button class="btn" type="button" onclick="startOCR()">영수증 텍스트 추출 (OCR)</button>
+        <button class="btn" type="button" onclick="document.getElementById('receipt-photo').click()"><img class="brand-icon" src="assets/images/brand/icon-camera.png" alt=""> 영수증 촬영, 사진 선택</button>
+        <p id="receipt-photo-status" class="photo-status" role="status">매장명, 거래일시, 합계 금액이 잘리지 않게 찍어 주세요.</p>
+        <label class="dataset-consent">
+            <input type="checkbox" id="receipt-dataset-consent">
+            <span><b>(선택)</b> 이 영수증 사진을 안녕멍뭉 영수증 인식(OCR) 개선에 쓰는 데 동의해요.
+                <details><summary>자세히</summary>
+                    수집: 영수증 사진(위치 정보는 지우고 저장), 읽은 글자와 품목<br>
+                    목적: 영수증 글자 인식 정확도 개선 학습과 평가<br>
+                    보관: 동의를 철회하거나 학습 데이터에서 빠질 때까지<br>
+                    동의하지 않아도 리워드와 구매 기록은 똑같이 이용할 수 있고, 구매 기록 화면에서 언제든 철회할 수 있어요.
+                </details>
+            </span>
+        </label>
+        <button class="btn" type="button" onclick="startOCR()">영수증 인증하기</button>
+        <a class="btn btn-ghost receipt-log-link" href="purchases.html">내 반려용품 구매 기록 보기</a>
         <div id="receipt-result" class="verify-result" role="status" hidden></div>
-        <p style="text-align:center; font-size:12px; color:#888; margin-top:15px;">* 오픈소스 OCR(RapidOCR · PaddleOCR 한국어 모델)이 서버에서 글자를 읽습니다. 반려동물 관련 구매, 최근 7일 이내 영수증만 인정되고, 같은 영수증은 한 번만, 영수증 리워드는 하루 1회 30P 적립됩니다.</p>
+        <p style="text-align:center; font-size:12px; color:#888; margin-top:15px;">* 오픈소스 OCR(RapidOCR, PaddleOCR 한국어 모델)이 서버에서 글자를 읽습니다. 리워드는 반려동물 관련 구매, 최근 7일 이내 영수증만 인정되고, 같은 영수증은 한 번만, 하루 1회 30P 적립됩니다. 읽은 품목과 금액은 기간과 상관없이 내 구매 기록에 남아요.</p>
     </div>
 
 <nav class="bottom-nav">
-  <a href="index.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>
-    홈
-  </a>
-
-  <a href="auth.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>
-    산책
-  </a>
-
-  <a href="shop.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>
-    상점
-  </a>
-
-  <a href="feed.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>
-    커뮤니티
-  </a>
-
-  <a href="mypage.html" class="nav-item">
-    <span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>
-    설정
-  </a>
+  <a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
+  <a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
+  <a href="feeding.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-feeding.svg" alt=""></span>급여</a>
+  <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
+  <a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
+  <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
 </nav>
 
 <div id="loading-modal" class="modal-overlay">
@@ -50,5 +44,5 @@
     </div>
 </div>
 <script src="assets/js/api-client.js"></script>
-<script src="assets/js/app.js?v=receipt-1"></script>
+<script src="assets/js/app.js?v=receipt-2"></script>
 </div></body></html>

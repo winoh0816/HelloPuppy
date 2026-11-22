@@ -4,6 +4,7 @@ OCR output is cached per preset in <dataset>/cache/<preset>.jsonl, so changing o
 seconds (`--parse-only`). Labelled KORIE receipts are scored against their transcriptions:
 total / date / time exact match (time5: within 5 minutes), store name fuzzy match (similarity >= 0.6 or containment after removing spaces and
 punctuation), and "id-ready" = total and date both right (what the duplicate fingerprint needs).
+With the KORIE item labels downloaded, item_recall / item_prec score item amounts and item_name the names (similarity >= 0.6).
 A random sample of the team photos was labelled by hand (manual_labels.csv: total and date; split "manual").
 Unlabelled and non-Korean ("foreign") photos are scored by coverage: how often each field was found at all.
 
@@ -107,6 +108,24 @@ def run_ocr(dataset: Path, preset: str, rows: list[dict]) -> dict[str, dict]:
     return cache
 
 
+def load_item_labels(raw_dir: Path) -> dict[str, list[tuple[str, int]]]:
+    """KORIE item labels (Dataset/receipt/external_raw/korie_items/items_*.csv): (name, line total) per receipt."""
+    labels: dict[str, list[tuple[str, int]]] = {}
+    for path in sorted(raw_dir.glob("items_*.csv")):
+        with open(path, encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                try:
+                    amount = int(float(row["Total Price"]))
+                except ValueError:
+                    continue
+                name = receipt.LEADING_CODE.sub("", row["Item_Name"].split(",")[0]).strip(" •*")
+                labels.setdefault(f"korie/{row['image_name']}", []).append((name, amount))
+    return labels
+
+
+ITEM_GT: dict[str, list[tuple[str, int]]] = {}
+
+
 def score(rows: list[dict], cache: dict[str, dict], show_errors: int) -> dict:
     stats: dict[str, dict[str, list[int]]] = {}
     errors: list[str] = []
@@ -139,6 +158,19 @@ def score(rows: list[dict], cache: dict[str, dict], show_errors: int) -> dict:
             checks["id_ready"] = checks["total"] and checks["date"]
         for key, ok in checks.items():
             add(key, ok)
+        if row["id"] in ITEM_GT:  # purchase log: item amounts (recall / precision) and names of the matched items
+            left = list(ITEM_GT[row["id"]])
+            for item in fields.items:
+                same = [g for g in left if g[1] == item["amount"]]
+                add("item_prec", same)
+                if same:
+                    best = max(same, key=lambda g: SequenceMatcher(None, squash(g[0]), squash(item["name"])).ratio())
+                    left.remove(best)
+                    add("item_name", SequenceMatcher(None, squash(best[0]), squash(item["name"])).ratio() >= 0.6)
+            for _ in range(len(ITEM_GT[row["id"]]) - len(left)):
+                add("item_recall", True)
+            for _ in left:
+                add("item_recall", False)
         if len(errors) < show_errors and not all(checks.values()):
             wrong = {k: (row.get(f"gt_{k}"), getattr(fields, {"total": "total_amount", "date": "purchased_date",
                                                               "time": "purchased_time", "store": "store_name"}[k]))
@@ -165,6 +197,7 @@ def main() -> None:
     args = parser.parse_args()
 
     rows = load_rows(args.dataset, args.split, args.source, args.limit)
+    ITEM_GT.update(load_item_labels(args.dataset.parent / "external_raw" / "korie_items"))
     if args.parse_only:
         cache_path = args.dataset / "cache" / f"{args.preset}.jsonl"
         cache = {json.loads(l)["id"]: json.loads(l) for l in cache_path.read_text(encoding="utf-8").splitlines()}

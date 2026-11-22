@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#fffaf5"><title>안녕멍뭉 - 반려용품 구매 기록</title><link rel="stylesheet" href="assets/css/style.css?v=purchases-1"></head>
+<body><div class="app-container">
+<header><h1><img class="brand-icon" src="assets/images/brand/icon-bone.png" alt=""> 구매 기록</h1><a class="muted header-action" href="receipt.html">영수증 추가 ›</a></header>
+<div class="content">
+  <p id="purchaseStatus" class="muted" role="status">구매 기록을 불러오는 중이에요…</p>
+
+  <div id="purchaseBody" hidden>
+    <!-- 한눈에: 지금까지 반려용품에 쓴 돈 -->
+    <section class="spend-hero" aria-labelledby="spendTotalLabel">
+      <small id="spendTotalLabel">지금까지 반려용품에 쓴 돈</small>
+      <strong id="spendTotal">0원</strong>
+      <span id="spendRange" class="spend-range"></span>
+      <dl class="spend-stats">
+        <div><dt>이번 달</dt><dd id="spendThisMonth">0원</dd></div>
+        <div><dt>월평균</dt><dd id="spendPerMonth">0원</dd></div>
+        <div><dt>영수증당</dt><dd id="spendPerReceipt">0원</dd></div>
+      </dl>
+    </section>
+
+    <div class="section-heading">📅 월별 지출 <span class="muted">최근 6개월</span></div>
+    <section class="card spend-chart" aria-label="월별 반려용품 지출">
+      <div id="monthlyBars" class="month-bars" role="list"></div>
+    </section>
+
+    <div class="section-heading">🦴 어디에 많이 썼을까 <span class="muted">품목 금액 기준</span></div>
+    <section class="card" aria-label="분류별 지출">
+      <ul id="categoryBars" class="category-bars"></ul>
+    </section>
+
+    <div class="section-heading">⭐ 자주 산 물품</div>
+    <section class="card" aria-label="자주 산 물품">
+      <ol id="topItems" class="top-items"></ol>
+    </section>
+
+    <div class="section-heading">🧾 영수증별 기록</div>
+    <p class="muted purchase-help">OCR이 잘못 읽은 이름이나 금액은 <b>수정</b>으로 고칠 수 있어요. 반려용품이 아닌 줄은 분류를 ‘반려용품 아님’으로 바꾸면 통계에서 빠져요.</p>
+    <div id="receiptList" class="receipt-log"></div>
+  </div>
+
+  <section id="purchaseEmpty" class="card purchase-empty" hidden>
+    <img src="assets/images/brand/emoji-question.png" alt="">
+    <strong>아직 구매 기록이 없어요</strong>
+    <p class="muted">펫샵이나 동물병원 영수증을 인증하면<br>산 물건과 금액이 여기에 차곡차곡 쌓여요.</p>
+    <a class="btn" href="receipt.html">영수증 인증하러 가기</a>
+  </section>
+</div>
+<nav class="bottom-nav">
+  <a href="index.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-home.png" alt=""></span>홈</a>
+  <a href="auth.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-walk.png" alt=""></span>산책</a>
+  <a href="feeding.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-feeding.svg" alt=""></span>급여</a>
+  <a href="shop.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/icon-bone.png" alt=""></span>상점</a>
+  <a href="feed.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-community.png" alt=""></span>커뮤니티</a>
+  <a href="mypage.html" class="nav-item"><span class="nav-icon"><img src="assets/images/brand/nav-settings.png" alt=""></span>설정</a>
+</nav>
+<script src="assets/js/api-client.js"></script>
+<script src="assets/js/purchases.js?v=1"></script>
+</div></body></html>
