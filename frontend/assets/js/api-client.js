@@ -16,7 +16,7 @@
         try {
             response = await fetch(`${API_BASE}${path}`, { ...options, headers });
         } catch (error) {
-            throw new Error("백엔드에 연결할 수 없습니다. SQLite API 서버가 실행 중인지 확인하세요.");
+            throw new Error("백엔드에 연결할 수 없습니다. API 서버가 실행 중인지 확인하세요.");
         }
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {

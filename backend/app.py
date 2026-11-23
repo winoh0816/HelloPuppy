@@ -1,4 +1,4 @@
-"""Authenticated HelloPuppy API backed by SQLite."""
+"""Authenticated HelloPuppy API backed by PostgreSQL."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ import io
 import json
 import os
 import secrets
-import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import psycopg
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +21,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import purchases, receipt, storage, verification
-from .database import db_connection, init_db, transaction
+from .database import Connection, close_pool, db_connection, init_db, transaction
 from .health import (
     LIVING_ENVIRONMENTS, PROGRESSIONS, REGISTRATION_TYPES, SHARE_SCOPES, SPECIES,
     HealthValidationError, build_summary, questionnaire_row_to_dict, record_row_to_dict, to_fhir_bundle,
@@ -60,11 +60,12 @@ TRUST_PROXY = os.getenv("HELLOPUPPY_TRUST_PROXY", "").strip().lower() in {"1", "
 async def lifespan(_: FastAPI):
     init_db()
     with transaction() as db:
-        purchases.backfill(db)  # receipts saved before the purchase log existed
+        purchases.backfill(db)  # receipts moved over from an old database before the purchase log existed
     yield
+    close_pool()
 
 
-app = FastAPI(title="HelloPuppy SQLite API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="HelloPuppy API", version="2.0.0", lifespan=lifespan)
 _frontend_origin = os.getenv("HELLOPUPPY_FRONTEND_ORIGIN", "*")
 app.add_middleware(
     CORSMiddleware,
@@ -88,11 +89,11 @@ def hash_password(password: str, salt: bytes | None = None) -> tuple[bytes, byte
     return actual_salt, digest
 
 
-def create_session(db: sqlite3.Connection, user_id: int) -> str:
+def create_session(db: Connection, user_id: int) -> str:
     token = secrets.token_urlsafe(48)
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     expires_at = (utc_now() + timedelta(days=TOKEN_TTL_DAYS)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    db.execute("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)", (token_hash, user_id, expires_at))
+    db.execute("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(%s,%s,%s)", (token_hash, user_id, expires_at))
     return token
 
 
@@ -106,7 +107,7 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
     with db_connection() as db:
         user = db.execute("""SELECT u.id,u.email,u.display_name,u.created_at,s.token_hash
             FROM sessions s JOIN users u ON u.id=s.user_id
-            WHERE s.token_hash=? AND s.expires_at>?""", (token_hash, utc_iso())).fetchone()
+            WHERE s.token_hash=%s AND s.expires_at>%s""", (token_hash, utc_iso())).fetchone()
     if user is None:
         raise HTTPException(status_code=401, detail="로그인 토큰이 만료되었거나 로그아웃되었습니다.")
     return dict(user)
@@ -256,41 +257,50 @@ def _decode_image(data: bytes, max_bytes: int = MAX_UPLOAD_BYTES) -> tuple[Image
         raise HTTPException(status_code=400, detail="올바른 이미지 파일이 아닙니다.") from error
 
 
-def _store_image(db: sqlite3.Connection, user_id: int, purpose: str, filename: str, mime: str, data: bytes, perceptual_hash: str = "") -> int:
+def _store_image(db: Connection, user_id: int, purpose: str, filename: str, mime: str, data: bytes, perceptual_hash: str = "") -> int:
     """Save the photo without its EXIF/GPS metadata as a file (storage.py) and record it in images."""
     storage_path = storage.save_image(data, mime)
-    cursor = db.execute(
-        "INSERT INTO images(user_id,purpose,mime_type,original_name,image_data,storage_path,perceptual_hash) VALUES(?,?,?,?,X'',?,?)",
+    row = db.execute(
+        "INSERT INTO images(user_id,purpose,mime_type,original_name,storage_path,perceptual_hash) VALUES(%s,%s,%s,%s,%s,%s) RETURNING id",
         (user_id, purpose, mime, Path(filename).name[:255], storage_path, perceptual_hash)
-    )
-    return int(cursor.lastrowid)
+    ).fetchone()
+    return int(row["id"])
 
 
-def _image_response(row: sqlite3.Row | None, cache_control: str = "private, no-store") -> Any:
+def _image_response(row: dict[str, Any] | None, cache_control: str = "private, no-store") -> Any:
     from fastapi.responses import Response
 
     if row is None:
         raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
     try:
-        content = storage.read_image(row["storage_path"]) if row["storage_path"] else bytes(row["image_data"])
+        content = storage.read_image(row["storage_path"])
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail="사진 파일을 찾을 수 없습니다.") from error
     return Response(content=content, media_type=row["mime_type"], headers={"Cache-Control": cache_control})
 
 
-def _award_points(db: sqlite3.Connection, user_id: int, delta: int, reason: str, reference: str) -> int:
-    account = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user_id,)).fetchone()
+def _lock_points(db: Connection, user_id: int) -> dict[str, Any] | None:
+    """Lock this user's points row until the transaction ends.
+
+    Requests for the same user then run one at a time from here on, so the daily reward count and the balance cannot be
+    read by two requests at once (SQLite did this with BEGIN IMMEDIATE, which locked the whole database).
+    """
+    return db.execute("SELECT balance FROM points_accounts WHERE user_id=%s FOR UPDATE", (user_id,)).fetchone()
+
+
+def _award_points(db: Connection, user_id: int, delta: int, reason: str, reference: str) -> int:
+    account = _lock_points(db, user_id)
     if account is None:
         raise HTTPException(status_code=404, detail="포인트 계정을 찾을 수 없습니다.")
     new_balance = int(account["balance"]) + delta
     if new_balance < 0:
         raise HTTPException(status_code=409, detail="포인트가 부족합니다.")
     db.execute(
-        "UPDATE points_accounts SET balance=?, updated_at=? WHERE user_id=?",
+        "UPDATE points_accounts SET balance=%s, updated_at=%s WHERE user_id=%s",
         (new_balance, utc_iso(), user_id)
     )
     db.execute(
-        "INSERT INTO points_ledger(user_id,delta,balance_after,reason,reference) VALUES(?,?,?,?,?)",
+        "INSERT INTO points_ledger(user_id,delta,balance_after,reason,reference) VALUES(%s,%s,%s,%s,%s)",
         (user_id, delta, new_balance, reason, reference)
     )
     return new_balance
@@ -303,8 +313,7 @@ def health() -> dict[str, Any]:
     status = verification.verifier.status()
     return {
         "status": "ok",
-        "database": "sqlite",
-        "database_path": str(Path(os.getenv("HELLOPUPPY_DB_PATH", Path(__file__).parent / "data" / "hellopuppy.sqlite3")).resolve()),
+        "database": "postgresql",
         **status,
         **receipt.reader.status(),
         "activity_model": status["trained_classifier"],
@@ -320,25 +329,22 @@ def register(request: RegisterRequest) -> dict[str, Any]:
     salt, digest = hash_password(request.password)
     try:
         with transaction() as db:
-            cursor = db.execute(
-                "INSERT INTO users(email,display_name,password_salt,password_hash) VALUES(?,?,?,?)",
+            user_id = int(db.execute(
+                "INSERT INTO users(email,display_name,password_salt,password_hash) VALUES(%s,%s,%s,%s) RETURNING id",
                 (email, request.display_name, salt, digest)
-            )
-            user_id = int(cursor.lastrowid)
-            db.execute("INSERT INTO pets(user_id) VALUES(?)", (user_id,))
-            db.execute("INSERT INTO points_accounts(user_id,balance) VALUES(?,?)", (user_id, STARTING_POINTS))
+            ).fetchone()["id"])
+            db.execute("INSERT INTO pets(user_id) VALUES(%s)", (user_id,))
+            db.execute("INSERT INTO points_accounts(user_id,balance) VALUES(%s,%s)", (user_id, STARTING_POINTS))
             if STARTING_POINTS:
                 db.execute(
-                    "INSERT INTO points_ledger(user_id,delta,balance_after,reason,reference) VALUES(?,?,?,?,?)",
+                    "INSERT INTO points_ledger(user_id,delta,balance_after,reason,reference) VALUES(%s,%s,%s,%s,%s)",
                     (user_id, STARTING_POINTS, STARTING_POINTS, "신규 가입 기본 포인트", f"signup:{user_id}")
                 )
             access_token = create_session(db, user_id)
-            db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user_id, "register", "user", user_id))
-            user = db.execute("SELECT id,email,display_name,created_at FROM users WHERE id=?", (user_id,)).fetchone()
-    except sqlite3.IntegrityError as error:
-        if "users.email" in str(error).lower() or "unique" in str(error).lower():
-            raise HTTPException(status_code=409, detail="이미 등록된 이메일입니다.") from error
-        raise
+            db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user_id, "register", "user", user_id))
+            user = db.execute("SELECT id,email,display_name,created_at FROM users WHERE id=%s", (user_id,)).fetchone()
+    except psycopg.errors.UniqueViolation as error:
+        raise HTTPException(status_code=409, detail="이미 등록된 이메일입니다.") from error
     return {"access_token": access_token, "token_type": "bearer", "user": dict(user), "points": STARTING_POINTS}
 
 
@@ -353,7 +359,7 @@ def _login_blocked(keys: list[tuple[str, int]]) -> int | None:
     window_start = (utc_now() - timedelta(minutes=LOGIN_WINDOW_MINUTES)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     with db_connection() as db:
         for key, limit in keys:
-            rows = db.execute("SELECT created_at FROM login_failures WHERE key=? AND created_at>? ORDER BY created_at DESC LIMIT ?",
+            rows = db.execute("SELECT created_at FROM login_failures WHERE key=%s AND created_at>%s ORDER BY created_at DESC LIMIT %s",
                               (key, window_start, limit)).fetchall()
             if len(rows) >= limit:
                 oldest = datetime.fromisoformat(rows[-1]["created_at"].replace("Z", "+00:00"))
@@ -369,27 +375,27 @@ def login(request: LoginRequest, http: Request) -> dict[str, Any]:
         raise HTTPException(status_code=429, headers={"Retry-After": str(retry_after)},
                             detail=f"로그인 시도가 너무 많아요. {max(1, round(retry_after / 60))}분 뒤에 다시 시도해 주세요.")
     with db_connection() as db:
-        user = db.execute("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+        user = db.execute("SELECT * FROM users WHERE lower(email)=%s", (email,)).fetchone()
     # 없는 이메일도 같은 비용으로 계산하고 실패로 센다 (가입 여부를 응답 시간·잠금으로 알 수 없도록).
     salt, expected = (bytes(user["password_salt"]), bytes(user["password_hash"])) if user else (bytes(16), b"")
     _, supplied = hash_password(request.password, salt)
     if user is None or not hmac.compare_digest(supplied, expected):
         with transaction() as db:
-            db.executemany("INSERT INTO login_failures(key) VALUES(?)", [(key,) for key, _ in keys])
-            db.execute("DELETE FROM login_failures WHERE created_at<?", ((utc_now() - timedelta(days=1)).isoformat(timespec="milliseconds").replace("+00:00", "Z"),))
+            db.cursor().executemany("INSERT INTO login_failures(key) VALUES(%s)", [(key,) for key, _ in keys])
+            db.execute("DELETE FROM login_failures WHERE created_at<%s", ((utc_now() - timedelta(days=1)).isoformat(timespec="milliseconds").replace("+00:00", "Z"),))
         raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다.")
     public_user = {key: user[key] for key in ("id", "email", "display_name", "created_at")}
     with transaction() as db:
-        db.execute("DELETE FROM login_failures WHERE key=?", (keys[0][0],))  # 성공하면 이 계정의 실패 횟수는 초기화
+        db.execute("DELETE FROM login_failures WHERE key=%s", (keys[0][0],))  # 성공하면 이 계정의 실패 횟수는 초기화
         access_token = create_session(db, int(user["id"]))
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "login", "user", user["id"]))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user["id"], "login", "user", user["id"]))
     return {"access_token": access_token, "token_type": "bearer", "user": public_user}
 
 
 @app.get("/api/auth/me")
 def me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        points = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user["id"],)).fetchone()
+        points = db.execute("SELECT balance FROM points_accounts WHERE user_id=%s", (user["id"],)).fetchone()
     public_user = {key: user[key] for key in ("id", "email", "display_name", "created_at")}
     return {"user": public_user, "points": int(points["balance"]) if points else 0}
 
@@ -397,8 +403,8 @@ def me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
 @app.post("/api/auth/logout")
 def logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
     with transaction() as db:
-        db.execute("DELETE FROM sessions WHERE token_hash=?", (user["token_hash"],))
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "logout", "user", user["id"]))
+        db.execute("DELETE FROM sessions WHERE token_hash=%s", (user["token_hash"],))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user["id"], "logout", "user", user["id"]))
     return {"logged_out": True}
 
 
@@ -408,13 +414,13 @@ def update_display_name(
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     with transaction() as db:
-        db.execute("UPDATE users SET display_name=? WHERE id=?", (request.display_name, user["id"]))
+        db.execute("UPDATE users SET display_name=%s WHERE id=%s", (request.display_name, user["id"]))
         db.execute(
-            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)",
             (user["id"], "update_display_name", "user", user["id"]),
         )
         updated = db.execute(
-            "SELECT id,email,display_name,created_at FROM users WHERE id=?", (user["id"],)
+            "SELECT id,email,display_name,created_at FROM users WHERE id=%s", (user["id"],)
         ).fetchone()
     return {"user": dict(updated)}
 
@@ -429,21 +435,21 @@ def update_email(
         raise HTTPException(status_code=422, detail="올바른 이메일 주소를 입력하세요.")
     with transaction() as db:
         account = db.execute(
-            "SELECT password_salt,password_hash FROM users WHERE id=?", (user["id"],)
+            "SELECT password_salt,password_hash FROM users WHERE id=%s", (user["id"],)
         ).fetchone()
         _, supplied = hash_password(request.current_password, bytes(account["password_salt"]))
         if not hmac.compare_digest(supplied, bytes(account["password_hash"])):
             raise HTTPException(status_code=401, detail="현재 비밀번호가 올바르지 않습니다.")
         try:
-            db.execute("UPDATE users SET email=? WHERE id=?", (email, user["id"]))
-        except sqlite3.IntegrityError as error:
+            db.execute("UPDATE users SET email=%s WHERE id=%s", (email, user["id"]))
+        except psycopg.errors.UniqueViolation as error:
             raise HTTPException(status_code=409, detail="이미 등록된 이메일입니다.") from error
         db.execute(
-            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)",
             (user["id"], "update_email", "user", user["id"]),
         )
         updated = db.execute(
-            "SELECT id,email,display_name,created_at FROM users WHERE id=?", (user["id"],)
+            "SELECT id,email,display_name,created_at FROM users WHERE id=%s", (user["id"],)
         ).fetchone()
     return {"user": dict(updated)}
 
@@ -455,19 +461,19 @@ def update_password(
 ) -> dict[str, bool]:
     with transaction() as db:
         account = db.execute(
-            "SELECT password_salt,password_hash FROM users WHERE id=?", (user["id"],)
+            "SELECT password_salt,password_hash FROM users WHERE id=%s", (user["id"],)
         ).fetchone()
         _, supplied = hash_password(request.current_password, bytes(account["password_salt"]))
         if not hmac.compare_digest(supplied, bytes(account["password_hash"])):
             raise HTTPException(status_code=401, detail="현재 비밀번호가 올바르지 않습니다.")
         salt, digest = hash_password(request.new_password)
         db.execute(
-            "UPDATE users SET password_salt=?,password_hash=? WHERE id=?",
+            "UPDATE users SET password_salt=%s,password_hash=%s WHERE id=%s",
             (salt, digest, user["id"]),
         )
-        db.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (user["id"], user["token_hash"]))
+        db.execute("DELETE FROM sessions WHERE user_id=%s AND token_hash<>%s", (user["id"], user["token_hash"]))
         db.execute(
-            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+            "INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)",
             (user["id"], "update_password", "user", user["id"]),
         )
     return {"password_updated": True}
@@ -476,7 +482,7 @@ def update_password(
 @app.get("/api/points")
 def get_points(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, int]:
     with db_connection() as db:
-        row = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user["id"],)).fetchone()
+        row = db.execute("SELECT balance FROM points_accounts WHERE user_id=%s", (user["id"],)).fetchone()
     return {"balance": int(row["balance"]) if row else 0}
 
 
@@ -485,7 +491,7 @@ def get_points_ledger(limit: int = 100, user: dict[str, Any] = Depends(get_curre
     safe_limit = max(1, min(limit, 300))
     with db_connection() as db:
         rows = db.execute(
-            "SELECT id,delta,balance_after,reason,reference,created_at FROM points_ledger WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            "SELECT id,delta,balance_after,reason,reference,created_at FROM points_ledger WHERE user_id=%s ORDER BY id DESC LIMIT %s",
             (user["id"], safe_limit)
         ).fetchall()
     return {"items": [dict(row) for row in rows]}
@@ -494,7 +500,7 @@ def get_points_ledger(limit: int = 100, user: dict[str, Any] = Depends(get_curre
 @app.get("/api/pet/profile")
 def get_pet_profile(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        row = db.execute("SELECT * FROM pets WHERE user_id=?", (user["id"],)).fetchone()
+        row = db.execute("SELECT * FROM pets WHERE user_id=%s", (user["id"],)).fetchone()
     return {"profile": dict(row) if row else None}
 
 
@@ -517,18 +523,18 @@ def save_pet_profile(request: PetProfileRequest, user: dict[str, Any] = Depends(
     except HealthValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     with transaction() as db:
-        db.execute("""UPDATE pets SET name=?,breed=?,birth_date=?,sex=?,weight_kg=?,neutered=?,guardian_name=?,guardian_phone=?,microchip_id=?,allergies=?,medical_notes=?,
-                species=?,birth_date_estimated=?,coat_features=?,registration_type=?,blood_type=?,living_environment=?,other_pets=?,updated_at=? WHERE user_id=?""",
+        db.execute("""UPDATE pets SET name=%s,breed=%s,birth_date=%s,sex=%s,weight_kg=%s,neutered=%s,guardian_name=%s,guardian_phone=%s,microchip_id=%s,allergies=%s,medical_notes=%s,
+                species=%s,birth_date_estimated=%s,coat_features=%s,registration_type=%s,blood_type=%s,living_environment=%s,other_pets=%s,updated_at=%s WHERE user_id=%s""",
                    (data["name"], data["breed"], data["birth_date"], data["sex"], data["weight_kg"], data["neutered"], data["guardian_name"], data["guardian_phone"], data["microchip_id"], data["allergies"], data["medical_notes"],
                     data["species"], int(data["birth_date_estimated"]), data["coat_features"], data["registration_type"], data["blood_type"], data["living_environment"], data["other_pets"], utc_iso(), user["id"]))
-        row = db.execute("SELECT * FROM pets WHERE user_id=?", (user["id"],)).fetchone()
+        row = db.execute("SELECT * FROM pets WHERE user_id=%s", (user["id"],)).fetchone()
     return {"profile": dict(row)}
 
 
 @app.get("/api/pet/food")
 def get_food(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        row = db.execute("SELECT f.* FROM food_profiles f JOIN pets p ON p.id=f.pet_id WHERE p.user_id=?", (user["id"],)).fetchone()
+        row = db.execute("SELECT f.* FROM food_profiles f JOIN pets p ON p.id=f.pet_id WHERE p.user_id=%s", (user["id"],)).fetchone()
     return {"food": dict(row) if row else None}
 
 
@@ -539,13 +545,13 @@ def save_food(request: FoodProfileRequest, user: dict[str, Any] = Depends(get_cu
     except HealthValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     with transaction() as db:
-        pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user["id"],)).fetchone()
-        db.execute("""INSERT INTO food_profiles(pet_id,food_name,meals_per_day,feeding_schedule,food_notes,amount_per_meal,treats,supplements,diet_changed_date,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)
+        pet = db.execute("SELECT id FROM pets WHERE user_id=%s", (user["id"],)).fetchone()
+        db.execute("""INSERT INTO food_profiles(pet_id,food_name,meals_per_day,feeding_schedule,food_notes,amount_per_meal,treats,supplements,diet_changed_date,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT(pet_id) DO UPDATE SET food_name=excluded.food_name,meals_per_day=excluded.meals_per_day,feeding_schedule=excluded.feeding_schedule,food_notes=excluded.food_notes,
             amount_per_meal=excluded.amount_per_meal,treats=excluded.treats,supplements=excluded.supplements,diet_changed_date=excluded.diet_changed_date,updated_at=excluded.updated_at""",
             (pet["id"], request.food_name, request.meals_per_day, request.feeding_schedule, request.food_notes,
              request.amount_per_meal, request.treats, request.supplements, request.diet_changed_date, utc_iso()))
-        row = db.execute("SELECT * FROM food_profiles WHERE pet_id=?", (pet["id"],)).fetchone()
+        row = db.execute("SELECT * FROM food_profiles WHERE pet_id=%s", (pet["id"],)).fetchone()
     return {"food": dict(row)}
 
 
@@ -553,15 +559,15 @@ def _activity_cutoff(days: int = 30) -> str:
     return (utc_now() - timedelta(days=days)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _require_health_image(db: sqlite3.Connection, user_id: int, image_id: int | None) -> None:
+def _require_health_image(db: Connection, user_id: int, image_id: int | None) -> None:
     if image_id is None:
         return
-    image = db.execute("SELECT id FROM images WHERE id=? AND user_id=? AND purpose='health'", (image_id, user_id)).fetchone()
+    image = db.execute("SELECT id FROM images WHERE id=%s AND user_id=%s AND purpose='health'", (image_id, user_id)).fetchone()
     if image is None:
         raise HTTPException(status_code=404, detail="업로드한 건강 기록 사진을 찾을 수 없습니다.")
 
 
-def _insert_health_record(db: sqlite3.Connection, user_id: int, request: HealthRecordRequest, *, source: str = "guardian",
+def _insert_health_record(db: Connection, user_id: int, request: HealthRecordRequest, *, source: str = "guardian",
                           clinic: str | None = None, author_name: str = "", author_license: str = "") -> dict[str, Any]:
     try:
         validate_iso_date(request.record_date, "날짜")
@@ -569,18 +575,17 @@ def _insert_health_record(db: sqlite3.Connection, user_id: int, request: HealthR
     except HealthValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     _require_health_image(db, user_id, request.image_id)
-    pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user_id,)).fetchone()
-    cursor = db.execute("""INSERT INTO health_records(user_id,pet_id,record_type,record_date,clinic,title,notes,details_json,source,author_name,author_license,image_id)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+    pet = db.execute("SELECT id FROM pets WHERE user_id=%s", (user_id,)).fetchone()
+    row = db.execute("""INSERT INTO health_records(user_id,pet_id,record_type,record_date,clinic,title,notes,details_json,source,author_name,author_license,image_id)
+        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
         (user_id, pet["id"], request.record_type, request.record_date, clinic if clinic is not None else request.clinic,
-         request.title, request.notes, json.dumps(details, ensure_ascii=False), source, author_name, author_license, request.image_id))
+         request.title, request.notes, json.dumps(details, ensure_ascii=False), source, author_name, author_license, request.image_id)).fetchone()
     if request.record_type == "weight":
         # 가장 최근 체중 측정 기록을 기본 정보의 현재 체중으로 반영한다.
-        newer = db.execute("""SELECT 1 FROM health_records WHERE user_id=? AND record_type='weight' AND id<>?
-            AND record_date>?""", (user_id, cursor.lastrowid, request.record_date)).fetchone()
+        newer = db.execute("""SELECT 1 FROM health_records WHERE user_id=%s AND record_type='weight' AND id<>%s
+            AND record_date>%s""", (user_id, row["id"], request.record_date)).fetchone()
         if newer is None:
-            db.execute("UPDATE pets SET weight_kg=?,updated_at=? WHERE id=?", (details["weight_kg"], utc_iso(), pet["id"]))
-    row = db.execute("SELECT * FROM health_records WHERE id=?", (cursor.lastrowid,)).fetchone()
+            db.execute("UPDATE pets SET weight_kg=%s,updated_at=%s WHERE id=%s", (details["weight_kg"], utc_iso(), pet["id"]))
     return record_row_to_dict(row)
 
 
@@ -594,7 +599,7 @@ def get_health_summary(user: dict[str, Any] = Depends(get_current_user)) -> dict
 @app.get("/api/health/records")
 def list_health_records(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        rows = db.execute("SELECT * FROM health_records WHERE user_id=? ORDER BY record_date DESC,id DESC", (user["id"],)).fetchall()
+        rows = db.execute("SELECT * FROM health_records WHERE user_id=%s ORDER BY record_date DESC,id DESC", (user["id"],)).fetchall()
     return {"items": [record_row_to_dict(row) for row in rows]}
 
 
@@ -608,17 +613,17 @@ def create_health_record(request: HealthRecordRequest, user: dict[str, Any] = De
 @app.delete("/api/health/records/{record_id}")
 def delete_health_record(record_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
     with transaction() as db:
-        cursor = db.execute("DELETE FROM health_records WHERE id=? AND user_id=?", (record_id, user["id"]))
+        cursor = db.execute("DELETE FROM health_records WHERE id=%s AND user_id=%s", (record_id, user["id"]))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="건강 기록을 찾을 수 없습니다.")
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "delete_health_record", "health_record", record_id))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user["id"], "delete_health_record", "health_record", record_id))
     return {"deleted": True}
 
 
 @app.get("/api/health/questionnaires")
 def list_questionnaires(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        rows = db.execute("SELECT * FROM pre_visit_questionnaires WHERE user_id=? ORDER BY visit_date DESC,id DESC", (user["id"],)).fetchall()
+        rows = db.execute("SELECT * FROM pre_visit_questionnaires WHERE user_id=%s ORDER BY visit_date DESC,id DESC", (user["id"],)).fetchall()
     return {"items": [questionnaire_row_to_dict(row) for row in rows]}
 
 
@@ -633,19 +638,18 @@ def create_questionnaire(request: QuestionnaireRequest, user: dict[str, Any] = D
         raise HTTPException(status_code=422, detail=str(error)) from error
     with transaction() as db:
         _require_health_image(db, int(user["id"]), request.image_id)
-        pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user["id"],)).fetchone()
-        cursor = db.execute("""INSERT INTO pre_visit_questionnaires(user_id,pet_id,visit_date,clinic,chief_complaint,onset_date,frequency,progression,home_care,recent_changes,concerns,systems_json,image_id)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        pet = db.execute("SELECT id FROM pets WHERE user_id=%s", (user["id"],)).fetchone()
+        row = db.execute("""INSERT INTO pre_visit_questionnaires(user_id,pet_id,visit_date,clinic,chief_complaint,onset_date,frequency,progression,home_care,recent_changes,concerns,systems_json,image_id)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             (user["id"], pet["id"], request.visit_date, request.clinic, request.chief_complaint, request.onset_date, request.frequency,
-             request.progression, request.home_care, request.recent_changes, request.concerns, json.dumps(systems, ensure_ascii=False), request.image_id))
-        row = db.execute("SELECT * FROM pre_visit_questionnaires WHERE id=?", (cursor.lastrowid,)).fetchone()
+             request.progression, request.home_care, request.recent_changes, request.concerns, json.dumps(systems, ensure_ascii=False), request.image_id)).fetchone()
     return {"questionnaire": questionnaire_row_to_dict(row)}
 
 
 @app.delete("/api/health/questionnaires/{questionnaire_id}")
 def delete_questionnaire(questionnaire_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
     with transaction() as db:
-        cursor = db.execute("DELETE FROM pre_visit_questionnaires WHERE id=? AND user_id=?", (questionnaire_id, user["id"]))
+        cursor = db.execute("DELETE FROM pre_visit_questionnaires WHERE id=%s AND user_id=%s", (questionnaire_id, user["id"]))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="문진표를 찾을 수 없습니다.")
     return {"deleted": True}
@@ -655,7 +659,7 @@ def delete_questionnaire(questionnaire_id: int, user: dict[str, Any] = Depends(g
 def export_health_fhir(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with transaction() as db:
         summary = build_summary(db, int(user["id"]), _activity_cutoff())
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "export_fhir", "pet", summary["pet"].get("id")))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user["id"], "export_fhir", "pet", summary["pet"].get("id")))
     return to_fhir_bundle(summary, utc_iso())
 
 
@@ -664,7 +668,7 @@ def export_health_fhir(user: dict[str, Any] = Depends(get_current_user)) -> dict
 # 토큰 원문은 발급 응답에서 한 번만 돌려주고 DB에는 SHA-256 해시만 저장한다.
 # ---------------------------------------------------------------------------
 
-def _share_status(row: sqlite3.Row) -> str:
+def _share_status(row: dict[str, Any]) -> str:
     if row["revoked_at"]:
         return "revoked"
     return "active" if row["expires_at"] > utc_iso() else "expired"
@@ -678,10 +682,10 @@ def create_health_share(request: HealthShareRequest, user: dict[str, Any] = Depe
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     expires_at = (utc_now() + timedelta(hours=request.hours)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     with transaction() as db:
-        cursor = db.execute("INSERT INTO health_shares(user_id,token_hash,clinic_name,scope,expires_at) VALUES(?,?,?,?,?)",
-                            (user["id"], token_hash, request.clinic_name, request.scope, expires_at))
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "share_create", "health_share", cursor.lastrowid))
-        row = db.execute("SELECT id,clinic_name,scope,expires_at,revoked_at,created_at FROM health_shares WHERE id=?", (cursor.lastrowid,)).fetchone()
+        row = db.execute("""INSERT INTO health_shares(user_id,token_hash,clinic_name,scope,expires_at) VALUES(%s,%s,%s,%s,%s)
+            RETURNING id,clinic_name,scope,expires_at,revoked_at,created_at""",
+                         (user["id"], token_hash, request.clinic_name, request.scope, expires_at)).fetchone()
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user["id"], "share_create", "health_share", row["id"]))
     return {"share": {**dict(row), "status": "active", "access_count": 0, "last_accessed_at": None}, "token": token}
 
 
@@ -691,17 +695,17 @@ def list_health_shares(user: dict[str, Any] = Depends(get_current_user)) -> dict
         rows = db.execute("""SELECT s.id,s.clinic_name,s.scope,s.expires_at,s.revoked_at,s.created_at,
             (SELECT COUNT(*) FROM audit_logs a WHERE a.entity_type='health_share' AND a.entity_id=s.id AND a.action IN ('share_view','share_write','share_export')) AS access_count,
             (SELECT MAX(a.created_at) FROM audit_logs a WHERE a.entity_type='health_share' AND a.entity_id=s.id AND a.action IN ('share_view','share_write','share_export')) AS last_accessed_at
-            FROM health_shares s WHERE s.user_id=? ORDER BY s.id DESC LIMIT 50""", (user["id"],)).fetchall()
+            FROM health_shares s WHERE s.user_id=%s ORDER BY s.id DESC LIMIT 50""", (user["id"],)).fetchall()
     return {"items": [{**dict(row), "status": _share_status(row)} for row in rows]}
 
 
 @app.delete("/api/health/shares/{share_id}")
 def revoke_health_share(share_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
     with transaction() as db:
-        cursor = db.execute("UPDATE health_shares SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL", (utc_iso(), share_id, user["id"]))
+        cursor = db.execute("UPDATE health_shares SET revoked_at=%s WHERE id=%s AND user_id=%s AND revoked_at IS NULL", (utc_iso(), share_id, user["id"]))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="공유 링크를 찾을 수 없거나 이미 취소되었습니다.")
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user["id"], "share_revoke", "health_share", share_id))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user["id"], "share_revoke", "health_share", share_id))
     return {"revoked": True}
 
 
@@ -712,14 +716,14 @@ def get_health_share(x_health_share_token: str | None = Header(default=None)) ->
         raise not_found
     token_hash = hashlib.sha256(x_health_share_token.encode("utf-8")).hexdigest()
     with db_connection() as db:
-        share = db.execute("SELECT * FROM health_shares WHERE token_hash=? AND revoked_at IS NULL AND expires_at>?", (token_hash, utc_iso())).fetchone()
+        share = db.execute("SELECT * FROM health_shares WHERE token_hash=%s AND revoked_at IS NULL AND expires_at>%s", (token_hash, utc_iso())).fetchone()
     if share is None:
         raise not_found
     return dict(share)
 
 
-def _log_share_access(db: sqlite3.Connection, share: dict[str, Any], action: str) -> None:
-    db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (share["user_id"], action, "health_share", share["id"]))
+def _log_share_access(db: Connection, share: dict[str, Any], action: str) -> None:
+    db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (share["user_id"], action, "health_share", share["id"]))
 
 
 def _public_share(share: dict[str, Any]) -> dict[str, Any]:
@@ -758,8 +762,8 @@ def create_shared_health_record(request: ClinicRecordRequest, share: dict[str, A
 @app.get("/api/shared/health/images/{image_id}")
 def get_shared_health_image(image_id: int, share: dict[str, Any] = Depends(get_health_share)) -> Any:
     with db_connection() as db:
-        row = db.execute("""SELECT i.mime_type,i.image_data,i.storage_path FROM images i
-            WHERE i.id=? AND i.user_id=? AND i.purpose='health' AND (
+        row = db.execute("""SELECT i.mime_type,i.storage_path FROM images i
+            WHERE i.id=%s AND i.user_id=%s AND i.purpose='health' AND (
                 EXISTS(SELECT 1 FROM health_records r WHERE r.image_id=i.id AND r.user_id=i.user_id)
                 OR EXISTS(SELECT 1 FROM pre_visit_questionnaires q WHERE q.image_id=i.id AND q.user_id=i.user_id))""",
                          (image_id, share["user_id"])).fetchone()
@@ -784,8 +788,8 @@ async def upload_image(purpose: str, photo: UploadFile = File(...), user: dict[s
 @app.get("/api/images/{image_id}")
 def get_image(image_id: int, user: dict[str, Any] = Depends(get_current_user)) -> Any:
     with db_connection() as db:
-        row = db.execute("""SELECT i.mime_type,i.image_data,i.storage_path FROM images i
-            WHERE i.id=? AND (i.user_id=? OR EXISTS(SELECT 1 FROM community_posts p WHERE p.image_id=i.id))""",
+        row = db.execute("""SELECT i.mime_type,i.storage_path FROM images i
+            WHERE i.id=%s AND (i.user_id=%s OR EXISTS(SELECT 1 FROM community_posts p WHERE p.image_id=i.id))""",
                          (image_id, user["id"])).fetchone()
     return _image_response(row)
 
@@ -796,8 +800,8 @@ def list_posts(limit: int = 50, user: dict[str, Any] = Depends(get_current_user)
     with db_connection() as db:
         rows = db.execute("""SELECT p.id,p.user_id,p.pet_id,p.category,p.title,p.body,p.location_name,p.latitude,p.longitude,p.image_id,p.created_at,u.display_name,
             (SELECT COUNT(*) FROM post_likes l WHERE l.post_id=p.id) AS like_count,
-            EXISTS(SELECT 1 FROM post_likes l WHERE l.post_id=p.id AND l.user_id=?) AS liked
-            FROM community_posts p JOIN users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT ?""", (user["id"], safe_limit)).fetchall()
+            EXISTS(SELECT 1 FROM post_likes l WHERE l.post_id=p.id AND l.user_id=%s) AS liked
+            FROM community_posts p JOIN users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT %s""", (user["id"], safe_limit)).fetchall()
     return {"items": [dict(row) for row in rows]}
 
 
@@ -810,7 +814,7 @@ def list_public_walk_map_posts(limit: int = 100) -> dict[str, Any]:
             (SELECT COUNT(*) FROM community_place_recommendations r WHERE r.post_id=p.id) AS recommendation_count
             FROM community_posts p JOIN users u ON u.id=p.user_id
             WHERE p.location_name<>'' AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
-            ORDER BY p.id DESC LIMIT ?""", (safe_limit,)).fetchall()
+            ORDER BY p.id DESC LIMIT %s""", (safe_limit,)).fetchall()
     return {"items": [dict(row) for row in rows]}
 
 
@@ -819,9 +823,9 @@ def get_public_walk_map_image(image_id: int) -> Any:
     """Serve an image only when it is attached to an explicitly public map post."""
 
     with db_connection() as db:
-        row = db.execute("""SELECT i.mime_type,i.image_data,i.storage_path FROM images i
+        row = db.execute("""SELECT i.mime_type,i.storage_path FROM images i
             JOIN community_posts p ON p.image_id=i.id
-            WHERE i.id=? AND i.purpose='community' AND p.location_name<>''
+            WHERE i.id=%s AND i.purpose='community' AND p.location_name<>''
                 AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL""", (image_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="공개 지도 게시물의 사진을 찾을 수 없습니다.")
@@ -831,22 +835,22 @@ def get_public_walk_map_image(image_id: int) -> Any:
 @app.get("/api/community/posts/{post_id}/recommendation")
 def get_place_recommendation(post_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        post = db.execute("SELECT id FROM community_posts WHERE id=? AND location_name<>''", (post_id,)).fetchone()
+        post = db.execute("SELECT id FROM community_posts WHERE id=%s AND location_name<>''", (post_id,)).fetchone()
         if post is None:
             raise HTTPException(status_code=404, detail="추천 장소를 찾을 수 없습니다.")
-        recommended = db.execute("SELECT 1 FROM community_place_recommendations WHERE post_id=? AND user_id=?", (post_id, user["id"])).fetchone()
-        count = db.execute("SELECT COUNT(*) AS count FROM community_place_recommendations WHERE post_id=?", (post_id,)).fetchone()["count"]
+        recommended = db.execute("SELECT 1 FROM community_place_recommendations WHERE post_id=%s AND user_id=%s", (post_id, user["id"])).fetchone()
+        count = db.execute("SELECT COUNT(*) AS count FROM community_place_recommendations WHERE post_id=%s", (post_id,)).fetchone()["count"]
     return {"recommended": recommended is not None, "count": int(count)}
 
 
 @app.post("/api/community/posts/{post_id}/recommendation")
 def recommend_place(post_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with transaction() as db:
-        post = db.execute("SELECT id FROM community_posts WHERE id=? AND location_name<>''", (post_id,)).fetchone()
+        post = db.execute("SELECT id FROM community_posts WHERE id=%s AND location_name<>''", (post_id,)).fetchone()
         if post is None:
             raise HTTPException(status_code=404, detail="추천 장소를 찾을 수 없습니다.")
-        db.execute("INSERT OR IGNORE INTO community_place_recommendations(post_id,user_id) VALUES(?,?)", (post_id, user["id"]))
-        count = db.execute("SELECT COUNT(*) AS count FROM community_place_recommendations WHERE post_id=?", (post_id,)).fetchone()["count"]
+        db.execute("INSERT INTO community_place_recommendations(post_id,user_id) VALUES(%s,%s) ON CONFLICT DO NOTHING", (post_id, user["id"]))
+        count = db.execute("SELECT COUNT(*) AS count FROM community_place_recommendations WHERE post_id=%s", (post_id,)).fetchone()["count"]
     return {"recommended": True, "count": int(count)}
 
 
@@ -856,56 +860,57 @@ def create_post(request: CommunityPostRequest, user: dict[str, Any] = Depends(ge
         raise HTTPException(status_code=422, detail="지도 위치는 위도와 경도를 함께 선택해야 합니다.")
     if request.image_id is not None:
         with db_connection() as db:
-            image = db.execute("SELECT id FROM images WHERE id=? AND user_id=? AND purpose='community'", (request.image_id, user["id"])).fetchone()
+            image = db.execute("SELECT id FROM images WHERE id=%s AND user_id=%s AND purpose='community'", (request.image_id, user["id"])).fetchone()
         if image is None:
             raise HTTPException(status_code=404, detail="업로드한 커뮤니티 사진을 찾을 수 없습니다.")
     with transaction() as db:
-        pet = db.execute("SELECT id FROM pets WHERE user_id=?", (user["id"],)).fetchone()
-        cursor = db.execute("INSERT INTO community_posts(user_id,pet_id,category,title,body,location_name,latitude,longitude,image_id) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (user["id"], pet["id"], request.category, request.title, request.body, request.location_name, request.latitude, request.longitude, request.image_id))
-        row = db.execute("SELECT * FROM community_posts WHERE id=?", (cursor.lastrowid,)).fetchone()
+        pet = db.execute("SELECT id FROM pets WHERE user_id=%s", (user["id"],)).fetchone()
+        row = db.execute("INSERT INTO community_posts(user_id,pet_id,category,title,body,location_name,latitude,longitude,image_id) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+                         (user["id"], pet["id"], request.category, request.title, request.body, request.location_name, request.latitude, request.longitude, request.image_id)).fetchone()
     return {"post": dict(row)}
 
 
 @app.post("/api/community/posts/{post_id}/like")
 def toggle_post_like(post_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with transaction() as db:
-        post = db.execute("SELECT id FROM community_posts WHERE id=?", (post_id,)).fetchone()
+        post = db.execute("SELECT id FROM community_posts WHERE id=%s", (post_id,)).fetchone()
         if post is None:
             raise HTTPException(status_code=404, detail="게시글을 찾을 수 없습니다.")
-        existing = db.execute("SELECT 1 FROM post_likes WHERE post_id=? AND user_id=?", (post_id, user["id"])).fetchone()
+        existing = db.execute("SELECT 1 FROM post_likes WHERE post_id=%s AND user_id=%s", (post_id, user["id"])).fetchone()
         if existing:
-            db.execute("DELETE FROM post_likes WHERE post_id=? AND user_id=?", (post_id, user["id"]))
+            db.execute("DELETE FROM post_likes WHERE post_id=%s AND user_id=%s", (post_id, user["id"]))
             liked = False
         else:
-            db.execute("INSERT INTO post_likes(post_id,user_id) VALUES(?,?)", (post_id, user["id"]))
+            # 같은 버튼을 빠르게 두 번 눌러 동시에 들어와도 오류 대신 한 번만 남긴다
+            db.execute("INSERT INTO post_likes(post_id,user_id) VALUES(%s,%s) ON CONFLICT DO NOTHING", (post_id, user["id"]))
             liked = True
-        count = db.execute("SELECT COUNT(*) AS count FROM post_likes WHERE post_id=?", (post_id,)).fetchone()["count"]
+        count = db.execute("SELECT COUNT(*) AS count FROM post_likes WHERE post_id=%s", (post_id,)).fetchone()["count"]
     return {"liked": liked, "count": int(count)}
 
 
 @app.get("/api/community/posts/{post_id}/comments")
 def list_post_comments(post_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        rows = db.execute("SELECT c.id,c.post_id,c.body,c.created_at,u.display_name FROM post_comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=? ORDER BY c.id LIMIT 300", (post_id,)).fetchall()
+        rows = db.execute("SELECT c.id,c.post_id,c.body,c.created_at,u.display_name FROM post_comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=%s ORDER BY c.id LIMIT 300", (post_id,)).fetchall()
     return {"items": [dict(row) for row in rows]}
 
 
 @app.post("/api/community/posts/{post_id}/comments")
 def create_post_comment(post_id: int, request: CommentRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with transaction() as db:
-        post = db.execute("SELECT id FROM community_posts WHERE id=?", (post_id,)).fetchone()
+        post = db.execute("SELECT id FROM community_posts WHERE id=%s", (post_id,)).fetchone()
         if post is None:
             raise HTTPException(status_code=404, detail="게시글을 찾을 수 없습니다.")
-        cursor = db.execute("INSERT INTO post_comments(post_id,user_id,body) VALUES(?,?,?)", (post_id, user["id"], request.body))
-        row = db.execute("SELECT c.id,c.post_id,c.body,c.created_at,u.display_name FROM post_comments c JOIN users u ON u.id=c.user_id WHERE c.id=?", (cursor.lastrowid,)).fetchone()
+        comment_id = db.execute("INSERT INTO post_comments(post_id,user_id,body) VALUES(%s,%s,%s) RETURNING id",
+                                (post_id, user["id"], request.body)).fetchone()["id"]
+        row = db.execute("SELECT c.id,c.post_id,c.body,c.created_at,u.display_name FROM post_comments c JOIN users u ON u.id=c.user_id WHERE c.id=%s", (comment_id,)).fetchone()
     return {"comment": dict(row)}
 
 
 @app.delete("/api/community/posts/{post_id}")
 def delete_post(post_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
     with transaction() as db:
-        cursor = db.execute("DELETE FROM community_posts WHERE id=? AND user_id=?", (post_id, user["id"]))
+        cursor = db.execute("DELETE FROM community_posts WHERE id=%s AND user_id=%s", (post_id, user["id"]))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="게시글을 찾을 수 없거나 삭제 권한이 없습니다.")
     return {"deleted": True}
@@ -925,13 +930,13 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
             image_id = _store_image(db, int(user["id"]), f"verification_{activity}", photo.filename or "photo", mime, data)
             if demo_mode:
                 db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,confidence,margin,image_id)
-                    SELECT ?,id,?,'demo',?,1.0,1.0,? FROM pets WHERE user_id=?""",
+                    SELECT %s,id,%s,'demo',%s,1.0,1.0,%s FROM pets WHERE user_id=%s""",
                     (user["id"], activity, activity, image_id, user["id"]))
-                balance_row = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user["id"],)).fetchone()
+                balance_row = db.execute("SELECT balance FROM points_accounts WHERE user_id=%s", (user["id"],)).fetchone()
                 balance = int(balance_row["balance"]) if balance_row else 0
             else:
                 db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,image_id)
-                    SELECT ?,id,?,'unavailable','',? FROM pets WHERE user_id=?""",
+                    SELECT %s,id,%s,'unavailable','',%s FROM pets WHERE user_id=%s""",
                     (user["id"], activity, image_id, user["id"]))
         if demo_mode:
             return {
@@ -953,7 +958,7 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
     # 1) 이미 포인트를 받은 사진(재압축·크기 변경 포함)을 다시 올렸는지
     with db_connection() as db:
         used_hashes = [row["perceptual_hash"] for row in db.execute("""SELECT i.perceptual_hash FROM activity_logs a JOIN images i ON i.id=a.image_id
-            WHERE a.user_id=? AND a.status='verified' AND i.perceptual_hash<>''""", (user_id,)).fetchall()]
+            WHERE a.user_id=%s AND a.status='verified' AND i.perceptual_hash<>''""", (user_id,)).fetchall()]
     duplicate = any(verification.hamming_distance(photo_hash, used) <= DUPLICATE_HASH_DISTANCE for used in used_hashes)
     fraud_checks.append({"key": "duplicate", "label": "새로운 사진", "passed": not duplicate,
                          "detail": "이미 인증에 사용한 사진이에요." if duplicate else "처음 제출한 사진이에요."})
@@ -988,20 +993,20 @@ async def verify_photo(activity: str, photo: UploadFile = File(...), user: dict[
     }
     points_awarded = 0
     with transaction() as db:
+        account = _lock_points(db, user_id)  # 같은 사용자의 동시 요청이 하루 횟수를 함께 넘기지 않도록
         image_id = _store_image(db, user_id, f"verification_{activity}", photo.filename or "photo", mime, data, photo_hash)
-        rewarded_today = db.execute("""SELECT COUNT(*) AS count FROM points_ledger WHERE user_id=? AND reason=? AND delta>0 AND created_at>=?""",
+        rewarded_today = db.execute("""SELECT COUNT(*) AS count FROM points_ledger WHERE user_id=%s AND reason=%s AND delta>0 AND created_at>=%s""",
                                     (user_id, f"{label} 인증", day_start)).fetchone()["count"]
-        cursor = db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,confidence,margin,image_id,details_json)
-            SELECT ?,id,?,?,?,?,?,?,? FROM pets WHERE user_id=?""",
+        activity_id = db.execute("""INSERT INTO activity_logs(user_id,pet_id,activity,status,predicted,confidence,margin,image_id,details_json)
+            SELECT %s,id,%s,%s,%s,%s,%s,%s,%s FROM pets WHERE user_id=%s RETURNING id""",
             (user_id, activity, "verified" if verified else "rejected", decision.predicted if decision else "",
              decision.confidence if decision else None, decision.margin if decision else None, image_id,
-             json.dumps(details, ensure_ascii=False), user_id))
+             json.dumps(details, ensure_ascii=False), user_id)).fetchone()["id"]
         if verified and rewarded_today < DAILY_REWARD_LIMITS[activity]:
             points_awarded = ACTIVITY_POINTS[activity]
-            balance = _award_points(db, user_id, points_awarded, f"{label} 인증", f"activity:{cursor.lastrowid}")
+            balance = _award_points(db, user_id, points_awarded, f"{label} 인증", f"activity:{activity_id}")
         else:
-            row = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user_id,)).fetchone()
-            balance = int(row["balance"]) if row else 0
+            balance = int(account["balance"]) if account else 0
     if verified and not points_awarded:
         message += f" 오늘 {label} 포인트는 {DAILY_REWARD_LIMITS[activity]}회 모두 받았어요."
 
@@ -1057,9 +1062,9 @@ async def scan_receipt(photo: UploadFile = File(...), dataset_consent: bool = Fo
 
     with db_connection() as db:
         duplicate_receipt = fingerprint is not None and db.execute(
-            "SELECT 1 FROM receipts WHERE fingerprint=? AND status='verified'", (fingerprint,)).fetchone() is not None
+            "SELECT 1 FROM receipts WHERE fingerprint=%s AND status='verified'", (fingerprint,)).fetchone() is not None
         used_hashes = [row["perceptual_hash"] for row in db.execute("""SELECT i.perceptual_hash FROM receipts r JOIN images i ON i.id=r.image_id
-            WHERE r.user_id=? AND r.status='verified' AND i.perceptual_hash<>''""", (user_id,)).fetchall()]
+            WHERE r.user_id=%s AND r.status='verified' AND i.perceptual_hash<>''""", (user_id,)).fetchall()]
     duplicate_photo = any(verification.hamming_distance(photo_hash, used) <= DUPLICATE_HASH_DISTANCE for used in used_hashes)
     checks = _receipt_checks(fields, len(lines), duplicate_receipt, duplicate_photo)
     verified = all(check["passed"] for check in checks)
@@ -1068,27 +1073,28 @@ async def scan_receipt(photo: UploadFile = File(...), dataset_consent: bool = Fo
     day_start = local_midnight.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     points_awarded = 0
     with transaction() as db:
+        account = _lock_points(db, user_id)  # 같은 사용자의 동시 요청이 하루 횟수를 함께 넘기지 않도록
         image_id = _store_image(db, user_id, "receipt", photo.filename or "receipt", mime, data, photo_hash)
-        rewarded_today = db.execute("""SELECT COUNT(*) AS count FROM points_ledger WHERE user_id=? AND reason='영수증 리워드' AND delta>0 AND created_at>=?""",
+        rewarded_today = db.execute("""SELECT COUNT(*) AS count FROM points_ledger WHERE user_id=%s AND reason='영수증 리워드' AND delta>0 AND created_at>=%s""",
                                     (user_id, day_start)).fetchone()["count"]
         # 구매 기록: 반려동물 구매이고 금액이 있으며 내 기록에 같은 영수증이 없으면 남긴다 (리워드 조건과 별개)
         logged_dup = purchases.is_logged_duplicate(db, user_id, fingerprint) or duplicate_photo
         in_log, log_reason = purchases.log_state(bool(fields.pet_keywords) or fields.pet_store, fields.pet_amount, logged_dup)
-        cursor = db.execute("""INSERT INTO receipts(user_id,image_id,status,store_name,business_number,purchased_date,purchased_time,
+        receipt_id = db.execute("""INSERT INTO receipts(user_id,image_id,status,store_name,business_number,purchased_date,purchased_time,
             total_amount,approval_number,fingerprint,raw_text,details_json,pet_store,pet_amount,in_log,log_reason,
-            dataset_consent,dataset_consent_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            dataset_consent,dataset_consent_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (user_id, image_id, "verified" if verified else "rejected", fields.store_name or "", fields.business_number or "",
              fields.purchased_date, fields.purchased_time, fields.total_amount, fields.approval_number or "", fingerprint,
              "\n".join(line.text for line in lines),
              json.dumps({"checks": checks, "fields": fields.to_dict(), "lines": [line.to_dict() for line in lines], **meta}, ensure_ascii=False),
-             int(fields.pet_store), fields.pet_amount, in_log, log_reason, int(dataset_consent), utc_iso() if dataset_consent else None))
-        purchases.save_items(db, cursor.lastrowid, user_id, fields.items)
+             int(fields.pet_store), fields.pet_amount, in_log, log_reason, int(dataset_consent), utc_iso() if dataset_consent else None)
+        ).fetchone()["id"]
+        purchases.save_items(db, receipt_id, user_id, fields.items)
         if verified and rewarded_today < RECEIPT_DAILY_LIMIT:
             points_awarded = RECEIPT_POINTS
-            balance = _award_points(db, user_id, points_awarded, "영수증 리워드", f"receipt:{cursor.lastrowid}")
+            balance = _award_points(db, user_id, points_awarded, "영수증 리워드", f"receipt:{receipt_id}")
         else:
-            row = db.execute("SELECT balance FROM points_accounts WHERE user_id=?", (user_id,)).fetchone()
-            balance = int(row["balance"]) if row else 0
+            balance = int(account["balance"]) if account else 0
 
     if verified and points_awarded:
         message = f"영수증 인증에 성공해 {points_awarded}P를 받았어요."
@@ -1097,7 +1103,7 @@ async def scan_receipt(photo: UploadFile = File(...), dataset_consent: bool = Fo
     else:
         message = "영수증을 확인하지 못했어요. 확인 필요: " + ", ".join(check["label"] for check in checks if not check["passed"])
     return {
-        "id": cursor.lastrowid, "verified": verified, "points_awarded": points_awarded, "balance": balance, "message": message,
+        "id": receipt_id, "verified": verified, "points_awarded": points_awarded, "balance": balance, "message": message,
         "checks": checks, "fields": fields.to_dict(), "lines": [line.text for line in lines], "ocr": meta,
         "log": {"in_log": bool(in_log), "reason": log_reason, "pet_amount": fields.pet_amount}, "dataset_consent": dataset_consent,
     }
@@ -1107,7 +1113,7 @@ RECEIPT_COLUMNS = """id,status,store_name,purchased_date,purchased_time,total_am
     items_corrected,dataset_consent,image_id,created_at"""
 
 
-def _receipt_with_items(db: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+def _receipt_with_items(db: Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     items = purchases.items_of(db, [row["id"] for row in rows])
     return [{**dict(row), "items": items.get(row["id"], [])} for row in rows]
 
@@ -1116,10 +1122,10 @@ def _receipt_with_items(db: sqlite3.Connection, rows: list[sqlite3.Row]) -> list
 def list_receipts(limit: int = 20, logged_only: bool = False, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     """Recent receipts with their items. logged_only: only the purchases counted in the purchase log."""
     safe_limit = max(1, min(limit, 200))
-    where = "user_id=? AND in_log=1" if logged_only else "user_id=?"
+    where = "user_id=%s AND in_log=1" if logged_only else "user_id=%s"
     with db_connection() as db:
         rows = db.execute(f"""SELECT {RECEIPT_COLUMNS} FROM receipts WHERE {where}
-            ORDER BY COALESCE(purchased_date, substr(created_at,1,10)) DESC, id DESC LIMIT ?""", (user["id"], safe_limit)).fetchall()
+            ORDER BY COALESCE(purchased_date, substr(created_at,1,10)) DESC, id DESC LIMIT %s""", (user["id"], safe_limit)).fetchall()
         return {"items": _receipt_with_items(db, rows), "categories": purchases.CATEGORY_NAMES}
 
 
@@ -1147,8 +1153,8 @@ class DatasetConsentRequest(BaseModel):
     consent: bool
 
 
-def _own_receipt(db: sqlite3.Connection, receipt_id: int, user_id: int) -> sqlite3.Row:
-    row = db.execute(f"SELECT {RECEIPT_COLUMNS},fingerprint FROM receipts WHERE id=? AND user_id=?", (receipt_id, user_id)).fetchone()
+def _own_receipt(db: Connection, receipt_id: int, user_id: int) -> dict[str, Any]:
+    row = db.execute(f"SELECT {RECEIPT_COLUMNS},fingerprint FROM receipts WHERE id=%s AND user_id=%s", (receipt_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="영수증을 찾을 수 없습니다.")
     return row
@@ -1170,9 +1176,9 @@ def update_receipt_items(receipt_id: int, request: ReceiptItemsRequest, user: di
         duplicate = row["log_reason"] == "duplicate" or purchases.is_logged_duplicate(db, user_id, row["fingerprint"], receipt_id)
         in_log, reason = purchases.log_state(has_pet, amount, duplicate)
         purchases.save_items(db, receipt_id, user_id, items)
-        db.execute("UPDATE receipts SET pet_amount=?, in_log=?, log_reason=?, items_corrected=1 WHERE id=?", (amount, in_log, reason, receipt_id))
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)", (user_id, "receipt_items_update", "receipt", receipt_id))
-        updated = db.execute(f"SELECT {RECEIPT_COLUMNS} FROM receipts WHERE id=?", (receipt_id,)).fetchall()
+        db.execute("UPDATE receipts SET pet_amount=%s, in_log=%s, log_reason=%s, items_corrected=1 WHERE id=%s", (amount, in_log, reason, receipt_id))
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)", (user_id, "receipt_items_update", "receipt", receipt_id))
+        updated = db.execute(f"SELECT {RECEIPT_COLUMNS} FROM receipts WHERE id=%s", (receipt_id,)).fetchall()
         return {"receipt": _receipt_with_items(db, updated)[0]}
 
 
@@ -1182,9 +1188,9 @@ def update_dataset_consent(receipt_id: int, request: DatasetConsentRequest, user
     user_id = int(user["id"])
     with transaction() as db:
         _own_receipt(db, receipt_id, user_id)
-        db.execute("UPDATE receipts SET dataset_consent=?, dataset_consent_at=? WHERE id=?",
+        db.execute("UPDATE receipts SET dataset_consent=%s, dataset_consent_at=%s WHERE id=%s",
                    (int(request.consent), utc_iso() if request.consent else None, receipt_id))
-        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(?,?,?,?)",
+        db.execute("INSERT INTO audit_logs(user_id,action,entity_type,entity_id) VALUES(%s,%s,%s,%s)",
                    (user_id, "dataset_consent_on" if request.consent else "dataset_consent_off", "receipt", receipt_id))
     return {"id": receipt_id, "dataset_consent": request.consent}
 
@@ -1202,7 +1208,7 @@ def missions_today(user: dict[str, Any] = Depends(get_current_user)) -> dict[str
     ]
     with db_connection() as db:
         rows = db.execute("""SELECT reason, COUNT(*) AS count, SUM(delta) AS points FROM points_ledger
-            WHERE user_id=? AND delta>0 AND created_at>=? GROUP BY reason""", (user["id"], day_start)).fetchall()
+            WHERE user_id=%s AND delta>0 AND created_at>=%s GROUP BY reason""", (user["id"], day_start)).fetchall()
     earned = {row["reason"]: (int(row["count"]), int(row["points"])) for row in rows}
     for mission in missions:
         count, _ = earned.get(reasons[mission["key"]], (0, 0))
@@ -1217,7 +1223,7 @@ def list_activity_logs(days: int = 30, user: dict[str, Any] = Depends(get_curren
     safe_days = max(1, min(days, 365))
     cutoff = (utc_now() - timedelta(days=safe_days)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     with db_connection() as db:
-        rows = db.execute("SELECT id,activity,status,predicted,confidence,margin,created_at FROM activity_logs WHERE user_id=? AND created_at>=? ORDER BY id DESC",
+        rows = db.execute("SELECT id,activity,status,predicted,confidence,margin,created_at FROM activity_logs WHERE user_id=%s AND created_at>=%s ORDER BY id DESC",
                           (user["id"], cutoff)).fetchall()
     return {"items": [dict(row) for row in rows]}
 
@@ -1241,14 +1247,13 @@ def redeem_product(request: ProductRedeemRequest, user: dict[str, Any] = Depends
     reference = secrets.token_urlsafe(24)
     with transaction() as db:
         balance = _award_points(db, int(user["id"]), -cost, f"상품 교환: {product_name}", f"redeem:{reference}")
-        cursor = db.execute("INSERT INTO shop_redemptions(user_id,product_id,product_name,image_path,cost) VALUES(?,?,?,?,?)",
-                    (user["id"], request.product_id, product_name, image_path[:500], cost))
-        redemption = db.execute("SELECT * FROM shop_redemptions WHERE id=?", (cursor.lastrowid,)).fetchone()
+        redemption = db.execute("INSERT INTO shop_redemptions(user_id,product_id,product_name,image_path,cost) VALUES(%s,%s,%s,%s,%s) RETURNING *",
+                                (user["id"], request.product_id, product_name, image_path[:500], cost)).fetchone()
     return {"redemption": dict(redemption), "balance": balance}
 
 
 @app.get("/api/shop/redemptions")
 def list_redemptions(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     with db_connection() as db:
-        rows = db.execute("SELECT * FROM shop_redemptions WHERE user_id=? ORDER BY id DESC LIMIT 200", (user["id"],)).fetchall()
+        rows = db.execute("SELECT * FROM shop_redemptions WHERE user_id=%s ORDER BY id DESC LIMIT 200", (user["id"],)).fetchall()
     return {"items": [dict(row) for row in rows]}

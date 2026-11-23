@@ -131,8 +131,7 @@ class _FakeVerifier:
         return decide(activity, analysis, SETTINGS), analysis
 
 
-def test_verify_endpoint_points_duplicates_daily_limit_and_old_photos(tmp_path, monkeypatch):
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "verify.sqlite3"))
+def test_verify_endpoint_points_duplicates_daily_limit_and_old_photos(postgres, monkeypatch):
     monkeypatch.setattr(api_module.verification, "verifier", _FakeVerifier())
     monkeypatch.setitem(api_module.DAILY_REWARD_LIMITS, "walk", 2)
 

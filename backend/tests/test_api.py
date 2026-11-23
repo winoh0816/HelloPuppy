@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import os
-import sqlite3
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -18,9 +17,7 @@ def _jpeg_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def test_community_upload_accepts_photos_over_12mb(tmp_path, monkeypatch):
-    db_path = tmp_path / "large-community-photo.sqlite3"
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
+def test_community_upload_accepts_photos_over_12mb(postgres):
     pixels = os.urandom(2200 * 2000 * 3)
     image = Image.frombytes("RGB", (2200, 2000), pixels)
     buffer = io.BytesIO()
@@ -55,8 +52,7 @@ def _register(client, email: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {registration.json()['access_token']}"}
 
 
-def test_structured_health_record_questionnaire_and_fhir_export(tmp_path, monkeypatch):
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "health.sqlite3"))
+def test_structured_health_record_questionnaire_and_fhir_export(postgres):
 
     with TestClient(app) as client:
         headers = _register(client, "health@example.test")
@@ -138,8 +134,7 @@ def test_structured_health_record_questionnaire_and_fhir_export(tmp_path, monkey
         assert all(entry["fullUrl"].startswith("urn:uuid:") for entry in bundle["entry"])
 
 
-def test_clinic_share_links_scope_revocation_and_isolation(tmp_path, monkeypatch):
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "share.sqlite3"))
+def test_clinic_share_links_scope_revocation_and_isolation(postgres):
 
     with TestClient(app) as client:
         headers = _register(client, "owner@example.test")
@@ -197,27 +192,11 @@ def test_clinic_share_links_scope_revocation_and_isolation(tmp_path, monkeypatch
         assert client.get("/api/health/shares", headers=headers).json()["items"][-1]["status"] == "revoked"
 
         with database.transaction() as db:
-            db.execute("UPDATE health_shares SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?", (write_share.json()["share"]["id"],))
+            db.execute("UPDATE health_shares SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=%s", (write_share.json()["share"]["id"],))
         assert client.get("/api/shared/health", headers=write_token).status_code == 404
 
 
-def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
-    db_path = tmp_path / "api-test.sqlite3"
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
-    monkeypatch.setenv("HELLOPUPPY_AUTH_SECRET", "test-secret-that-is-at-least-thirty-two-characters-long")
-
-    with sqlite3.connect(db_path) as legacy_db:
-        legacy_db.execute("""CREATE TABLE community_posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            pet_id INTEGER,
-            category TEXT NOT NULL DEFAULT 'daily',
-            title TEXT NOT NULL DEFAULT '',
-            body TEXT NOT NULL,
-            image_id INTEGER,
-            created_at TEXT NOT NULL DEFAULT ''
-        )""")
-
+def test_account_pet_health_photos_community_and_points(postgres, monkeypatch):
     with TestClient(app) as client:
         registration = client.post("/api/auth/register", json={
             "email": "guardian@example.test",
@@ -351,17 +330,16 @@ def test_account_pet_health_photos_community_and_points(tmp_path, monkeypatch):
         assert client.post("/api/auth/logout", headers=headers).status_code == 200
         assert client.get("/api/auth/me", headers=headers).status_code == 401
 
-    assert db_path.is_file()
-    with sqlite3.connect(db_path) as db:
-        assert db.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 3
-        assert db.execute("SELECT COUNT(*) FROM community_posts").fetchone()[0] == 1
-        assert db.execute("SELECT COUNT(*) FROM health_records").fetchone()[0] == 1
-        assert db.execute("SELECT COUNT(*) FROM activity_logs WHERE status='unavailable'").fetchone()[0] == 1
-        assert db.execute("SELECT COUNT(*) FROM activity_logs WHERE status='demo'").fetchone()[0] == 1
+    with database.db_connection() as db:
+        count = lambda query: db.execute(f"SELECT COUNT(*) AS n FROM {query}").fetchone()["n"]
+        assert count("images") == 3
+        assert count("community_posts") == 1
+        assert count("health_records") == 1
+        assert count("activity_logs WHERE status='unavailable'") == 1
+        assert count("activity_logs WHERE status='demo'") == 1
 
 
-def test_login_is_locked_after_repeated_failures(tmp_path, monkeypatch):
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "login-limit.sqlite3"))
+def test_login_is_locked_after_repeated_failures(postgres, monkeypatch):
     monkeypatch.setattr(api_module, "LOGIN_MAX_FAILURES_PER_EMAIL", 3)
     monkeypatch.setattr(api_module, "LOGIN_MAX_FAILURES_PER_IP", 5)
     good = {"email": "owner@example.test", "password": "correct horse battery staple"}

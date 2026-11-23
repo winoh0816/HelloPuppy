@@ -3,3 +3,5 @@ fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 python-multipart>=0.0.9
 Pillow>=10.4
+# PostgreSQL 드라이버와 연결 풀 (binary: 따로 PostgreSQL 클라이언트를 설치하지 않아도 된다)
+psycopg[binary,pool]>=3.2,<4

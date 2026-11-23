@@ -4,8 +4,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    # 데이터(DB·사진)와 내려받는 모델은 볼륨에 둔다 (docker-compose.yml)
-    HELLOPUPPY_DB_PATH=/data/hellopuppy.sqlite3 \
+    # 사진과 내려받는 모델은 볼륨에 둔다. DB 주소(HELLOPUPPY_DATABASE_URL)는 docker-compose.yml 에서 넘긴다.
     HELLOPUPPY_MEDIA_DIR=/data/media \
     HELLOPUPPY_MODEL_DIR=/models \
     HELLOPUPPY_OCR_MODEL_DIR=/models/ocr \

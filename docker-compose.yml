@@ -1,17 +1,39 @@
 # 실행: docker compose up -d --build  →  http://localhost:8080
 # 처음 한 번 AI 모델(약 650MB)을 받아 두면 첫 인증 요청이 빨라진다:
 #   docker compose run --rm api python -m backend.tools.download_verification_models
+# 실제 서버에서는 같은 폴더의 .env 파일(git 에 올리지 않음)에 DB 비밀번호를 정한다:
+#   POSTGRES_PASSWORD=길고-무작위인-비밀번호   (주소에 들어가므로 영문·숫자·-_ 만 쓴다)
 services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hellopuppy
+      POSTGRES_USER: hellopuppy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hellopuppy}   # 기본값은 로컬 개발용
+    volumes:
+      - hellopuppy-db:/var/lib/postgresql/data              # PostgreSQL 데이터
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hellopuppy -d hellopuppy"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    # 포트를 바깥에 열지 않는다. api 컨테이너만 같은 내부 네트워크에서 접속한다.
+
   api:
     build:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
+      HELLOPUPPY_DATABASE_URL: postgresql://hellopuppy:${POSTGRES_PASSWORD:-hellopuppy}@db:5432/hellopuppy
       HELLOPUPPY_TRUST_PROXY: "1"           # nginx 가 넣은 X-Forwarded-For 로 클라이언트 IP 를 본다
       HELLOPUPPY_FRONTEND_ORIGIN: ${HELLOPUPPY_FRONTEND_ORIGIN:-http://localhost:8080}
     volumes:
-      - hellopuppy-data:/data               # SQLite DB + 사진 파일 (백업 대상은 이 볼륨 하나)
+      - hellopuppy-data:/data               # 사진 파일
       - hellopuppy-models:/models           # CLIP·YOLO·OCR 사전학습 모델
     expose:
       - "8000"
@@ -27,6 +49,8 @@ services:
       - ./frontend:/usr/share/nginx/html:ro
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
+# 백업 대상: hellopuppy-db (pg_dump 권장) 와 hellopuppy-data (사진)
 volumes:
+  hellopuppy-db:
   hellopuppy-data:
   hellopuppy-models:

@@ -1,4 +1,4 @@
-/* Shared UI behavior. Durable user data is stored through the authenticated SQLite API. */
+/* Shared UI behavior. Durable user data is stored through the authenticated API. */
 const VERIFICATION_API_BASE = window.HELLOPUPPY_API_BASE || "http://127.0.0.1:8000";
 let isBuyingItem = false;
 let shopToastTimer = null;

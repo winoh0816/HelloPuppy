@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import sqlite3
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -40,9 +39,7 @@ def test_strip_metadata_removes_gps_and_keeps_orientation():
     assert cleaned.size == (100, 160)  # rotation applied to the pixels, so it still displays upright
 
 
-def test_uploaded_photo_is_served_without_gps_and_kept_outside_the_database(tmp_path, monkeypatch):
-    db_path = tmp_path / "storage.sqlite3"
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
+def test_uploaded_photo_is_served_without_gps_and_kept_outside_the_database(postgres, tmp_path):
     with TestClient(app) as client:
         token = client.post("/api/auth/register", json={"email": "gps@example.test", "password": "correct horse battery staple",
                                                         "display_name": "위치"}).json()["access_token"]
@@ -54,39 +51,11 @@ def test_uploaded_photo_is_served_without_gps_and_kept_outside_the_database(tmp_
     assert served.status_code == 200 and served.headers["content-type"] == "image/jpeg"
     _assert_no_metadata(served.content)
 
-    row = sqlite3.connect(db_path).execute("SELECT length(image_data), storage_path FROM images").fetchone()
-    assert row[0] == 0 and row[1]
-    stored = (tmp_path / "media" / row[1])
+    with database.db_connection() as db:
+        storage_path = db.execute("SELECT storage_path FROM images").fetchone()["storage_path"]
+    assert storage_path
+    stored = (tmp_path / "media" / storage_path)
     assert stored.is_file() and stored.read_bytes() == served.content
-
-
-def test_startup_moves_old_database_photos_to_files_without_metadata(tmp_path, monkeypatch):
-    db_path = tmp_path / "old.sqlite3"
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
-    # A database from before photos were files: the original upload, GPS included, sits in image_data.
-    old = sqlite3.connect(db_path)
-    old.executescript("""
-        CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            password_hash BLOB NOT NULL, password_salt BLOB NOT NULL, display_name TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
-        CREATE TABLE images (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            purpose TEXT NOT NULL, mime_type TEXT NOT NULL, original_name TEXT NOT NULL DEFAULT '', image_data BLOB NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
-    """)
-    old.execute("INSERT INTO users(email,password_hash,password_salt,display_name) VALUES('old@example.test',x'00',x'00','예전')")
-    old.execute("INSERT INTO images(user_id,purpose,mime_type,image_data) VALUES(1,'community','image/jpeg',?)", (_photo_with_gps(),))
-    old.commit()
-    old.close()
-
-    database.init_db()
-    database.init_db()  # running again (every server start) must not move anything twice
-
-    db = sqlite3.connect(db_path)
-    rows = db.execute("SELECT length(image_data), storage_path FROM images").fetchall()
-    assert len(rows) == 1 and rows[0][0] == 0 and rows[0][1]
-    assert len(list((tmp_path / "media").rglob("*.jpg"))) == 1
-    _assert_no_metadata(storage.read_image(rows[0][1]))
 
 
 def test_read_image_never_leaves_the_media_folder(tmp_path, monkeypatch):

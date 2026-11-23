@@ -15,11 +15,12 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import date
 from html import escape
 from typing import Any
+
+from .database import Connection
 
 SPECIES = {"dog", "cat", "other"}
 REGISTRATION_TYPES = {"", "internal", "external", "none"}
@@ -175,7 +176,7 @@ def validate_systems(systems: dict[str, Any]) -> dict[str, str]:
     return cleaned
 
 
-def record_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def record_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     record = dict(row)
     try:
         record["details"] = json.loads(record.pop("details_json", None) or "{}")
@@ -184,7 +185,7 @@ def record_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return record
 
 
-def questionnaire_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def questionnaire_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     try:
         item["systems"] = json.loads(item.pop("systems_json", None) or "{}")
@@ -193,21 +194,21 @@ def questionnaire_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
-def build_summary(db: sqlite3.Connection, user_id: int, activity_cutoff: str) -> dict[str, Any]:
+def build_summary(db: Connection, user_id: int, activity_cutoff: str) -> dict[str, Any]:
     """Collect everything a clinic needs from the guardian into one payload."""
-    pet = db.execute("SELECT * FROM pets WHERE user_id=?", (user_id,)).fetchone()
+    pet = db.execute("SELECT * FROM pets WHERE user_id=%s", (user_id,)).fetchone()
     pet_dict = dict(pet) if pet else {}
     pet_dict.pop("user_id", None)
     pet_dict["birth_date_estimated"] = bool(pet_dict.get("birth_date_estimated"))
-    food = db.execute("SELECT f.* FROM food_profiles f JOIN pets p ON p.id=f.pet_id WHERE p.user_id=?", (user_id,)).fetchone()
+    food = db.execute("SELECT f.* FROM food_profiles f JOIN pets p ON p.id=f.pet_id WHERE p.user_id=%s", (user_id,)).fetchone()
     records = db.execute(
-        "SELECT * FROM health_records WHERE user_id=? ORDER BY record_date DESC,id DESC", (user_id,)
+        "SELECT * FROM health_records WHERE user_id=%s ORDER BY record_date DESC,id DESC", (user_id,)
     ).fetchall()
     questionnaires = db.execute(
-        "SELECT * FROM pre_visit_questionnaires WHERE user_id=? ORDER BY visit_date DESC,id DESC LIMIT 5", (user_id,)
+        "SELECT * FROM pre_visit_questionnaires WHERE user_id=%s ORDER BY visit_date DESC,id DESC LIMIT 5", (user_id,)
     ).fetchall()
     activity = db.execute(
-        "SELECT activity,created_at FROM activity_logs WHERE user_id=? AND status='verified' AND created_at>=? ORDER BY id DESC",
+        "SELECT activity,created_at FROM activity_logs WHERE user_id=%s AND status='verified' AND created_at>=%s ORDER BY id DESC",
         (user_id, activity_cutoff),
     ).fetchall()
     return {

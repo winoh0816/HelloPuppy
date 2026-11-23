@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 import unicodedata
 from collections import defaultdict
 from datetime import date
 from typing import Any
 
 from . import receipt
+from .database import Connection
 
 CATEGORY_NAMES = receipt.CATEGORY_NAMES
 NOT_PET = receipt.NOT_PET
@@ -33,35 +33,34 @@ def log_state(pet_ok: bool, pet_amount: int | None, duplicate: bool) -> tuple[in
     return 1, ""
 
 
-def is_logged_duplicate(db: sqlite3.Connection, user_id: int, fingerprint: str | None, exclude_id: int | None = None) -> bool:
+def is_logged_duplicate(db: Connection, user_id: int, fingerprint: str | None, exclude_id: int | None = None) -> bool:
     if not fingerprint:
         return False
-    row = db.execute("SELECT 1 FROM receipts WHERE user_id=? AND fingerprint=? AND in_log=1 AND id<>?",
+    row = db.execute("SELECT 1 FROM receipts WHERE user_id=%s AND fingerprint=%s AND in_log=1 AND id<>%s",
                      (user_id, fingerprint, exclude_id or 0)).fetchone()
     return row is not None
 
 
-def save_items(db: sqlite3.Connection, receipt_id: int, user_id: int, items: list[dict[str, Any]]) -> None:
-    db.execute("DELETE FROM receipt_items WHERE receipt_id=?", (receipt_id,))
-    db.executemany(
-        "INSERT INTO receipt_items(receipt_id,user_id,position,name,quantity,unit_price,amount,category) VALUES(?,?,?,?,?,?,?,?)",
+def save_items(db: Connection, receipt_id: int, user_id: int, items: list[dict[str, Any]]) -> None:
+    db.execute("DELETE FROM receipt_items WHERE receipt_id=%s", (receipt_id,))
+    db.cursor().executemany(
+        "INSERT INTO receipt_items(receipt_id,user_id,position,name,quantity,unit_price,amount,category) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
         [(receipt_id, user_id, index, item["name"], item.get("quantity"), item.get("unit_price"), int(item["amount"]),
           item.get("category") or "기타 용품") for index, item in enumerate(items)])
 
 
-def items_of(db: sqlite3.Connection, receipt_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+def items_of(db: Connection, receipt_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
     if not receipt_ids:
         return {}
-    marks = ",".join("?" * len(receipt_ids))
-    rows = db.execute(f"""SELECT receipt_id,name,quantity,unit_price,amount,category FROM receipt_items
-        WHERE receipt_id IN ({marks}) ORDER BY receipt_id, position""", receipt_ids).fetchall()
+    rows = db.execute("""SELECT receipt_id,name,quantity,unit_price,amount,category FROM receipt_items
+        WHERE receipt_id = ANY(%s) ORDER BY receipt_id, position""", (list(receipt_ids),)).fetchall()
     grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[row["receipt_id"]].append({key: row[key] for key in ("name", "quantity", "unit_price", "amount", "category")})
     return grouped
 
 
-def _month(row: sqlite3.Row) -> str:
+def _month(row: dict[str, Any]) -> str:
     return (row["purchased_date"] or row["created_at"][:10])[:7]
 
 
@@ -70,10 +69,10 @@ def _name_key(name: str) -> str:
     return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", name)).lower()
 
 
-def summary(db: sqlite3.Connection, user_id: int, months: int = 6, today: date | None = None) -> dict[str, Any]:
+def summary(db: Connection, user_id: int, months: int = 6, today: date | None = None) -> dict[str, Any]:
     today = today or date.today()
     receipts = db.execute("""SELECT id,store_name,purchased_date,created_at,pet_amount FROM receipts
-        WHERE user_id=? AND in_log=1 ORDER BY COALESCE(purchased_date, substr(created_at,1,10))""", (user_id,)).fetchall()
+        WHERE user_id=%s AND in_log=1 ORDER BY COALESCE(purchased_date, substr(created_at,1,10))""", (user_id,)).fetchall()
     items = items_of(db, [row["id"] for row in receipts])
 
     total = sum(int(row["pet_amount"] or 0) for row in receipts)
@@ -125,7 +124,7 @@ def summary(db: sqlite3.Connection, user_id: int, months: int = 6, today: date |
     }
 
 
-def backfill(db: sqlite3.Connection) -> int:
+def backfill(db: Connection) -> int:
     """Receipts saved before the purchase log existed: rebuild items from the OCR text kept in raw_text."""
     rows = db.execute("SELECT id,user_id,raw_text,fingerprint FROM receipts WHERE log_reason IS NULL ORDER BY id").fetchall()
     for row in rows:
@@ -133,12 +132,12 @@ def backfill(db: sqlite3.Connection) -> int:
         save_items(db, row["id"], row["user_id"], fields.items)
         duplicate = is_logged_duplicate(db, row["user_id"], row["fingerprint"], row["id"])
         in_log, reason = log_state(bool(fields.pet_keywords) or fields.pet_store, fields.pet_amount, duplicate)
-        db.execute("UPDATE receipts SET pet_store=?, pet_amount=?, in_log=?, log_reason=? WHERE id=?",
+        db.execute("UPDATE receipts SET pet_store=%s, pet_amount=%s, in_log=%s, log_reason=%s WHERE id=%s",
                    (int(fields.pet_store), fields.pet_amount, in_log, reason, row["id"]))
     return len(rows)
 
 
-def training_record(row: sqlite3.Row, items: list[dict[str, Any]]) -> dict[str, Any]:
+def training_record(row: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
     """One consented receipt as an OCR training sample: OCR output is a pseudo label, user-corrected items are checked."""
     details = json.loads(row["details_json"] or "{}")
     return {

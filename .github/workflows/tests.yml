@@ -11,6 +11,21 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
+    # 테스트용 PostgreSQL. 테스트마다 빈 스키마를 만들어 쓴다 (backend/tests/conftest.py).
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      HELLOPUPPY_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
         with:

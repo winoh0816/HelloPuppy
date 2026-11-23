@@ -96,8 +96,7 @@ def _receipt(day: date, total: str, approval: str, store: str = "멍멍펫샵") 
             f"승인번호 {approval}"]
 
 
-def test_receipt_endpoint_rewards_once_and_blocks_reuse(tmp_path, monkeypatch):
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(tmp_path / "receipt.sqlite3"))
+def test_receipt_endpoint_rewards_once_and_blocks_reuse(postgres, monkeypatch):
     reader = _FakeReader()
     monkeypatch.setattr(api_module.receipt, "reader", reader)
     today = date.today()

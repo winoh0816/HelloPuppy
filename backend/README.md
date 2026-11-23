@@ -127,7 +127,7 @@ Python 3.11 또는 3.12 권장. 필요한 것만 설치할 수 있게 종속성 
 
 | 파일 | 내용 |
 |---|---|
-| `requirements.txt` | API 서버 핵심 (계정, 포인트, 건강기록, 커뮤니티, 사진). AI 판별 없이 동작 |
+| `requirements.txt` | API 서버 핵심 (계정, 포인트, 건강기록, 커뮤니티, 사진, PostgreSQL 드라이버 psycopg). AI 판별 없이 동작 |
 | `requirements-detection.txt` | + 사진 인증(CLIP, YOLO), 영수증 OCR. torch 포함 |
 | `requirements-train.txt` | + `train_activity.py` 학습용 torch, torchvision. GPU가 있으면 PyTorch 공식 안내의 CUDA 빌드를 먼저 설치 |
 | `requirements-dev.txt` | + pytest, httpx (CI와 같은 테스트 환경) |
@@ -137,24 +137,45 @@ uv venv .venv-backend --python 3.12
 uv pip install --python .venv-backend\Scripts\python.exe -r backend\requirements-detection.txt -r backend\requirements-dev.txt
 ```
 
-## SQLite 계정, 앱 데이터 API
+## PostgreSQL 계정, 앱 데이터 API
 
-백엔드는 첫 시작 때 `backend/data/hellopuppy.sqlite3`를 만들고 필요한 테이블을 자동 생성합니다. DB 파일은 `.gitignore` 대상이며 버전 관리에 포함되지 않습니다. 다른 위치를 쓰려면 `HELLOPUPPY_DB_PATH`를 지정합니다. 가입 시 기본 포인트는 0P이며, 판별된 미션 성공만 서버 트랜잭션으로 포인트를 지급합니다.
+데이터는 **PostgreSQL**(오픈소스, PostgreSQL License, 상업적 이용 포함 무료)에 저장합니다. 백엔드는 시작할 때 필요한 테이블과 인덱스를 자동으로 만듭니다. 접속 주소는 `HELLOPUPPY_DATABASE_URL`로 정하며, 없으면 `postgresql://hellopuppy:hellopuppy@127.0.0.1:5432/hellopuppy`에 접속합니다. 가입 시 기본 포인트는 0P이며, 판별된 미션 성공만 서버 트랜잭션으로 포인트를 지급합니다. 포인트를 주거나 쓰는 요청은 그 사용자의 포인트 행을 잠그고(`SELECT ... FOR UPDATE`) 처리하므로, 같은 사용자의 요청이 동시에 와도 하루 적립 횟수를 넘기거나 잔액보다 많이 쓰지 않습니다.
 
-개발 중 프론트엔드와 API의 주소가 다르면 CORS 허용 주소를 PowerShell 세션에 지정합니다. 운영 환경에서는 와일드카드 대신 실제 프론트엔드 origin만 허용해야 합니다.
+### 로컬 PostgreSQL 준비 (둘 중 하나)
+
+- **Docker**: 아래 명령으로 PostgreSQL 컨테이너만 띄웁니다.
+  ```powershell
+  docker run -d --name hellopuppy-db -e POSTGRES_DB=hellopuppy -e POSTGRES_USER=hellopuppy -e POSTGRES_PASSWORD=hellopuppy -p 5432:5432 -v hellopuppy-db:/var/lib/postgresql/data postgres:17-alpine
+  ```
+- **Windows 설치**: [PostgreSQL 공식 설치 파일](https://www.postgresql.org/download/windows/)로 설치한 뒤 SQL Shell(psql)에서 계정과 DB를 만듭니다.
+  ```sql
+  CREATE USER hellopuppy WITH PASSWORD 'hellopuppy';
+  CREATE DATABASE hellopuppy OWNER hellopuppy;
+  ```
+
+다른 주소나 비밀번호를 쓰면 PowerShell 세션에 지정합니다. 개발 중 프론트엔드와 API의 주소가 다르면 CORS 허용 주소도 지정합니다. 운영 환경에서는 와일드카드 대신 실제 프론트엔드 origin만 허용해야 합니다.
 
 ```powershell
-$env:HELLOPUPPY_DB_PATH = "backend/data/hellopuppy.sqlite3"
+$env:HELLOPUPPY_DATABASE_URL = "postgresql://hellopuppy:hellopuppy@127.0.0.1:5432/hellopuppy"
 $env:HELLOPUPPY_FRONTEND_ORIGIN = "http://127.0.0.1:5500"
 ```
 
-`HELLOPUPPY_FRONTEND_ORIGIN`은 실제 프론트엔드 주소로 설정합니다. Live Server 포트가 다르면 값을 바꾸세요. 같은 API 프로세스와 DB 파일을 계속 사용해야 데이터가 유지됩니다.
+`HELLOPUPPY_FRONTEND_ORIGIN`은 실제 프론트엔드 주소로 설정합니다. Live Server 포트가 다르면 값을 바꾸세요. 연결 풀 크기는 `HELLOPUPPY_DB_POOL_SIZE`(기본 10)로 바꿉니다.
 
-**사진 저장**: 업로드 사진은 EXIF, XMP(GPS 위치, 기기 정보 등)를 지우고 다시 인코딩해 `backend/data/media/YYYY/MM/`에 파일로 저장합니다(`HELLOPUPPY_MEDIA_DIR`). DB에는 경로만 남깁니다. 산책 인증의 촬영 시각은 저장 전에 원본에서 읽습니다. 예전처럼 DB 안(BLOB)에 들어 있던 사진은 서버 시작 시 같은 방식으로 파일로 옮기고 DB를 `VACUUM`합니다(개발 DB 기준 사진 43장 중 GPS 포함 3장 → 0장, DB 52MB → 0.2MB). 백업할 것은 DB 파일과 `media/` 폴더 두 가지입니다.
+### 예전 SQLite 데이터 옮기기
 
-**로그인 시도 제한**: 15분 안에 같은 이메일로 5번, 같은 IP에서 20번 실패하면 남은 시간만큼 `429`(`Retry-After`)로 막습니다. 없는 이메일도 같은 비용으로 계산하고 실패로 세서, 가입 여부를 응답으로 알 수 없게 했습니다. 기록은 SQLite `login_failures`에 남겨 서버를 재시작해도 유지됩니다. `HELLOPUPPY_LOGIN_WINDOW_MINUTES`, `HELLOPUPPY_LOGIN_MAX_FAILURES_PER_EMAIL`, `HELLOPUPPY_LOGIN_MAX_FAILURES_PER_IP`로 조정합니다. 리버스 프록시 뒤에서는 `HELLOPUPPY_TRUST_PROXY=1`로 `X-Forwarded-For`를 믿게 합니다. 이때 프록시가 이 헤더를 덮어써야 합니다(`deploy/nginx.conf`).
+SQLite(`backend/data/hellopuppy.sqlite3`)로 쓰던 데이터는 한 번만 옮기면 됩니다. 빈 PostgreSQL DB에만 옮기며(이미 계정이 있으면 멈춤), SQLite 파일은 읽기만 합니다. id는 그대로 유지되고, 사진 파일 폴더(`backend/data/media`)는 그대로 씁니다. 사진이 DB 안(BLOB)에 들어 있던 아주 예전 DB는 메타데이터를 지운 파일로 꺼냅니다.
 
-로그인 토큰은 충분히 긴 무작위 bearer token이며 서버에는 토큰 원문이 아닌 SHA-256 해시와 만료 시각만 SQLite `sessions` 테이블에 보관합니다. 로그아웃하면 서버 세션도 삭제되어 토큰을 즉시 폐기합니다. 비밀번호는 PBKDF2-HMAC-SHA256으로 해시합니다.
+```powershell
+$env:HELLOPUPPY_DATABASE_URL = "postgresql://hellopuppy:hellopuppy@127.0.0.1:5432/hellopuppy"
+.venv-backend\Scripts\python.exe -m backend.tools.migrate_sqlite_to_postgres --sqlite backend\data\hellopuppy.sqlite3
+```
+
+**사진 저장**: 업로드 사진은 EXIF, XMP(GPS 위치, 기기 정보 등)를 지우고 다시 인코딩해 `backend/data/media/YYYY/MM/`에 파일로 저장합니다(`HELLOPUPPY_MEDIA_DIR`). DB에는 경로만 남깁니다. 산책 인증의 촬영 시각은 저장 전에 원본에서 읽습니다. 백업할 것은 PostgreSQL(`pg_dump`)과 `media/` 폴더 두 가지입니다.
+
+**로그인 시도 제한**: 15분 안에 같은 이메일로 5번, 같은 IP에서 20번 실패하면 남은 시간만큼 `429`(`Retry-After`)로 막습니다. 없는 이메일도 같은 비용으로 계산하고 실패로 세서, 가입 여부를 응답으로 알 수 없게 했습니다. 기록은 DB `login_failures` 테이블에 남겨 서버를 재시작해도 유지됩니다. `HELLOPUPPY_LOGIN_WINDOW_MINUTES`, `HELLOPUPPY_LOGIN_MAX_FAILURES_PER_EMAIL`, `HELLOPUPPY_LOGIN_MAX_FAILURES_PER_IP`로 조정합니다. 리버스 프록시 뒤에서는 `HELLOPUPPY_TRUST_PROXY=1`로 `X-Forwarded-For`를 믿게 합니다. 이때 프록시가 이 헤더를 덮어써야 합니다(`deploy/nginx.conf`).
+
+로그인 토큰은 충분히 긴 무작위 bearer token이며 서버에는 토큰 원문이 아닌 SHA-256 해시와 만료 시각만 DB `sessions` 테이블에 보관합니다. 로그아웃하면 서버 세션도 삭제되어 토큰을 즉시 폐기합니다. 비밀번호는 PBKDF2-HMAC-SHA256으로 해시합니다.
 
 ### 계정 및 저장 데이터
 
@@ -175,13 +196,14 @@ $env:HELLOPUPPY_FRONTEND_ORIGIN = "http://127.0.0.1:5500"
 
 프론트엔드에는 bearer token만 `localStorage`에 저장합니다. 포인트, 프로필, 활동, 건강 로그, 커뮤니티 글/사진 등 업무 데이터는 API로 저장합니다. 로그인 전 계정이 필요한 화면은 `account.html`로 보냅니다. 신규 계정은 기본 0P로 시작하고, 기존 브라우저 localStorage 포인트/프로필은 클라이언트가 조작할 수 있어 자동 이관하지 않습니다. 영수증은 OCR로 확인한 뒤에만 포인트를 주고, 판별 모델 파일이 없어 `503`이 나는 사진도 보상 없이 거절됩니다.
 
-저장 흐름의 통합 테스트는 프로젝트 루트에서 실행합니다. AI 모델 없이 돌아가며, GitHub Actions(`.github/workflows/tests.yml`)가 push, PR마다 Python 3.11/3.12로 같은 테스트와 프론트 JS 문법 검사를 실행합니다.
+저장 흐름의 통합 테스트는 프로젝트 루트에서 실행합니다. AI 모델 없이 돌아가며, GitHub Actions(`.github/workflows/tests.yml`)가 push, PR마다 PostgreSQL 컨테이너를 띄워 Python 3.11/3.12로 같은 테스트와 프론트 JS 문법 검사를 실행합니다. DB가 필요한 테스트는 `HELLOPUPPY_TEST_DATABASE_URL`의 PostgreSQL에 테스트마다 빈 스키마를 만들어 쓰고 지웁니다(DB의 다른 데이터는 건드리지 않음). 주소가 없으면 그 테스트만 건너뜁니다.
 
 ```powershell
+$env:HELLOPUPPY_TEST_DATABASE_URL = "postgresql://hellopuppy:hellopuppy@127.0.0.1:5432/hellopuppy"
 .venv-backend\Scripts\python.exe -m pytest backend\tests -q
 ```
 
-SQLite는 단일 서버용입니다. 다중 서버 배포나 동시 쓰기가 많아지면 PostgreSQL로 옮기고, 사진 폴더는 오브젝트 스토리지(S3 등)로 옮기는 것을 권장합니다(`storage.py`의 저장, 읽기 함수만 바꾸면 됩니다). 정기 백업, 복구 테스트, 만료된 세션 정리, HTTPS, 운영 CORS, 사용자 동의/데이터 삭제 정책 및 개인정보 보관 정책을 별도로 마련하세요. 현재 만료 토큰은 요청에서 거절되며 DB 행 자동 정리는 아직 없습니다.
+사진 폴더는 서버를 여러 대로 늘릴 때 오브젝트 스토리지(S3 등)로 옮기는 것을 권장합니다(`storage.py`의 저장, 읽기 함수만 바꾸면 됩니다). 정기 백업, 복구 테스트, 만료된 세션 정리, HTTPS, 운영 CORS, 사용자 동의/데이터 삭제 정책 및 개인정보 보관 정책을 별도로 마련하세요. 현재 만료 토큰은 요청에서 거절되며 DB 행 자동 정리는 아직 없습니다.
 
 프로젝트에 포함된 견종 YOLO 데이터를 이용해 보조 개 탐지기를 학습하려면 추가 종속성과 Ultralytics의 초기 가중치 다운로드가 필요합니다.
 
@@ -223,18 +245,20 @@ MPDD 산책 후보를 준비하려면 다음 스크립트를 실행합니다. �
 
 ## Docker 배포
 
-저장소 루트의 `docker-compose.yml`은 두 컨테이너로 구성됩니다.
+저장소 루트의 `docker-compose.yml`은 세 컨테이너로 구성됩니다.
+- `db`: PostgreSQL 17. `api`가 준비 상태(`pg_isready`)를 확인한 뒤 시작합니다.
 - `api`: `backend/Dockerfile`, FastAPI + AI 판별, CPU torch
 - `web`: nginx. `frontend/`를 서빙하고 `/api`를 `api`로 넘깁니다. 같은 주소에서 서비스되므로 프론트 설정은 필요 없습니다.
 
-API 포트는 바깥에 열지 않습니다.
+DB와 API 포트는 바깥에 열지 않습니다. 실제 서버에서는 `docker-compose.yml`과 같은 폴더의 `.env` 파일(git 제외)에 `POSTGRES_PASSWORD=길고-무작위인-값`을 넣어 기본 비밀번호를 바꾸세요. 이 값은 DB 접속 주소에 들어가므로 영문, 숫자, `-`, `_`만 씁니다. 비밀번호는 DB 볼륨을 처음 만들 때 정해지므로, 이미 만든 볼륨의 비밀번호를 바꾸려면 PostgreSQL에서 `ALTER USER`로 바꿉니다.
 
 ```bash
 docker compose up -d --build                    # http://localhost:8080
 docker compose run --rm api python -m backend.tools.download_verification_models   # 처음 한 번, AI 모델 약 650MB
 ```
 
-- 데이터는 볼륨 두 개에 남습니다. `hellopuppy-data`에는 DB와 사진이, `hellopuppy-models`에는 CLIP, YOLO, OCR 모델이 들어갑니다. 백업 대상은 `hellopuppy-data` 하나입니다.
+- 데이터는 볼륨 세 개에 남습니다. `hellopuppy-db`에는 PostgreSQL 데이터가, `hellopuppy-data`에는 사진이, `hellopuppy-models`에는 CLIP, YOLO, OCR 모델이 들어갑니다. 백업 대상은 `hellopuppy-db`(`docker compose exec db pg_dump -U hellopuppy hellopuppy > backup.sql`)와 `hellopuppy-data`입니다.
+- 예전 SQLite 볼륨 데이터를 옮기려면 SQLite 파일을 `api` 컨테이너에서 읽을 수 있게 한 뒤 `docker compose run --rm api python -m backend.tools.migrate_sqlite_to_postgres --sqlite /data/hellopuppy.sqlite3`를 실행합니다. 사진은 같은 `hellopuppy-data` 볼륨에 그대로 있습니다.
 - 학습한 산책 판정 모델(`backend/models/walk_model.json`)은 이미지에 포함됩니다.
 - HTTPS는 compose 앞단의 리버스 프록시(Caddy, 클라우드 로드밸런서 등)에서 처리하세요. 병원 공유 링크를 다른 기기에서 열려면 HTTPS 주소가 필요합니다.
 - 포트는 `HELLOPUPPY_PORT`로, 허용할 프론트 주소는 `HELLOPUPPY_FRONTEND_ORIGIN`으로 바꿉니다.

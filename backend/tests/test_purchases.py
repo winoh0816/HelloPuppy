@@ -75,9 +75,7 @@ def _pet_receipt(day: date, approval: str, food_price: str = "42,000", total: st
             f"로얄캐닌 미니 어덜트 3kg 1 {food_price}", "덴탈껌 30P 2 25,000", f"합계 금액 {total}원", f"승인번호 {approval}"]
 
 
-def test_purchase_log_summary_editing_consent_and_export(tmp_path, monkeypatch):
-    db_path = tmp_path / "purchases.sqlite3"
-    monkeypatch.setenv("HELLOPUPPY_DB_PATH", str(db_path))
+def test_purchase_log_summary_editing_consent_and_export(postgres, tmp_path, monkeypatch):
     reader = _FakeReader()
     monkeypatch.setattr(api_module.receipt, "reader", reader)
     today = date.today()

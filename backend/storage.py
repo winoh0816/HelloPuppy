@@ -1,11 +1,11 @@
-"""Photo storage: uploads are re-encoded without metadata and kept as files outside the SQLite database.
+"""Photo storage: uploads are re-encoded without metadata and kept as files outside the database.
 
 - Privacy: phone photos carry EXIF/XMP (GPS position, device, owner name). Every stored copy is re-encoded from pixels
   only, so nothing but the picture leaves the server through the image endpoints. Callers that need the capture time
   (walk/feeding verification) read it from the original bytes *before* calling save_image().
-- Size: photos used to live in the `images.image_data` BLOB column, which made the database grow by gigabytes and
-  hard to back up. Files now go to HELLOPUPPY_MEDIA_DIR (default backend/data/media/) as YYYY/MM/<random>.<ext>;
-  the database keeps only `storage_path`. migrate_blobs() moves old rows out on startup.
+- Size: files go to HELLOPUPPY_MEDIA_DIR (default backend/data/media/) as YYYY/MM/<random>.<ext>; the database keeps
+  only `images.storage_path`. Very old SQLite databases kept photos in an `image_data` BLOB column:
+  tools/migrate_sqlite_to_postgres.py moves those to files with save_legacy_photo().
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import io
 import os
 import secrets
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,17 +63,10 @@ def read_image(storage_path: str) -> bytes:
     return path.read_bytes()
 
 
-def migrate_blobs(db: sqlite3.Connection) -> int:
-    """Move photos stored in the database (before files were used) to media files, stripping their metadata."""
-    moved = 0
-    rows = db.execute("SELECT id,mime_type FROM images WHERE storage_path='' AND length(image_data)>0").fetchall()
-    for row in rows:
-        data = bytes(db.execute("SELECT image_data FROM images WHERE id=?", (row["id"],)).fetchone()["image_data"])
-        try:
-            cleaned = strip_metadata(data, row["mime_type"])
-        except Exception:  # unreadable old row: keep the bytes as they were rather than lose the photo
-            cleaned = data
-        path = _write(cleaned, row["mime_type"])
-        db.execute("UPDATE images SET storage_path=?, image_data=X'' WHERE id=?", (path, row["id"]))
-        moved += 1
-    return moved
+def save_legacy_photo(data: bytes, mime: str) -> str:
+    """Like save_image() for a photo taken out of an old database: an unreadable one is kept as it was, not lost."""
+    try:
+        cleaned = strip_metadata(data, mime)
+    except Exception:
+        cleaned = data
+    return _write(cleaned, mime)
